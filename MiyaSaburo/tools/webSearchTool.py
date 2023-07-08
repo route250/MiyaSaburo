@@ -97,7 +97,8 @@ class WebSearchModule:
         try:
             # requestsを使用してWebページを取得
             response = requests.get(zURL, timeout=mTimeout, headers={"User-Agent": mUserAgent})
-            with open("weather.html","wb") as f:
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/weather.html","wb") as f:
                 f.write(response.content)
             zDocument = lxml.html.fromstring(response.content)
             zWeathernewsList = zDocument.xpath(".//div[div/div/span/span='Weather' and .//a[contains(@href,'weathernews') and contains(span,'weathernews')]]")
@@ -132,7 +133,8 @@ class WebSearchModule:
         try:
             # requestsを使用してWebページを取得
             response = requests.get(zURL, timeout=mTimeout, headers={"User-Agent": mUserAgent})
-            with open("search.html","wb") as f:
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/search.html","wb") as f:
                 f.write(response.content)
             zDocument = lxml.html.fromstring(response.content)
             zYahooNewsList = zDocument.xpath(".//a[@href and contains(.,'Yahoo!ニュース')]")
