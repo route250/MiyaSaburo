@@ -1,5 +1,3 @@
-from MiyaSaburo.listen0708 import Model
-
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, AgentFinish, LLMResult
@@ -9,9 +7,11 @@ from typing import Any, Dict, List, Optional, Union
 
 
 class BotCustomCallbackHandler(BaseCallbackHandler):
+    from listen0708 import AppModel
     """Custom CallbackHandler."""
-    def __init__(self):
+    def __init__(self,Model:AppModel):
         super().__init__()
+        self.Model = Model
         self._buffer=''
         self.message_callback = None
         self.action_callback = None
@@ -34,8 +34,7 @@ class BotCustomCallbackHandler(BaseCallbackHandler):
         print(f"[HDR#{self.talk_id}:{grp}]{text}")
 
     def is_cancel(self,mesg):
-        global Model
-        if self.talk_id != Model.talk_id:
+        if self.talk_id != self.Model.talk_id:
             self.log( f"{mesg}_cancel","" )
             #raise TaskCancelException(f"task {self.talk_id} is cancelled")
             return True

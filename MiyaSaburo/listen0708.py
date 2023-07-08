@@ -22,10 +22,9 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from MiyaSaburo.libs.BotCustomCallbackHandler import BotCustomCallbackHandler
-from MiyaSaburo.libs.VoiceAPI import VoiceAPI
-from MiyaSaburo.tools.QuietTool import QuietTool
-from MiyaSaburo.tools.webSearchTool import webSearchTool
+from libs.VoiceAPI import VoiceAPI
+from tools.QuietTool import QuietTool
+from tools.webSearchTool import WebSearchTool
 
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory
@@ -674,6 +673,7 @@ def is_cancel(text):
 import langchain.tools.python
 def LLM_process():
     """LLM"""
+    from libs.BotCustomCallbackHandler import BotCustomCallbackHandler
     global Model 
     global running
     global quiet_timer
@@ -702,7 +702,7 @@ def LLM_process():
         llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
         # ツールの準備
         llm_math_chain = LLMMathChain.from_llm(llm=llm,verbose=False)
-        web_tool = webSearchTool.WebSearchTool()
+        web_tool = WebSearchTool()
         tools=[]
         tools += [
             web_tool,
@@ -760,7 +760,7 @@ def LLM_process():
                 # 現在の時刻を取得
                 formatted_time = formatted_datetime()
                 system_message.content = system_prompt + ' Use language of '+Model.lang + " ( current time: " + formatted_time + " " + current_location +")"
-                callback_hdr = BotCustomCallbackHandler()
+                callback_hdr = BotCustomCallbackHandler(Model)
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
                 callback_hdr.action_callback = tool_callback
@@ -869,7 +869,7 @@ def wave_process():
                     # テキストを音声に変換
                     Model.wave_state.set_running(True)
                     print(f"[WAVE] create audio {text}")
-                    audio_bytes :bytes = Model.voice_api.text_to_audio(text)
+                    audio_bytes :bytes = Model.voice_api.text_to_audio(text,lang=Model.lang[:2])
                     talk_queue.put( (talk_id,text,audio_bytes) )
                 except Exception as e:
                     print(e)
@@ -1218,3 +1218,5 @@ def test():
 if __name__ == '__main__':
     main()
     #test()
+
+__all__ = ['AppModel']

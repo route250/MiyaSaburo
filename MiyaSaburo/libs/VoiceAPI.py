@@ -1,14 +1,9 @@
-from MiyaSaburo.listen0708 import Model
-
 
 import requests
-from gtts import gTTS
-
-
 import json
 import time
 from io import BytesIO
-
+from gtts import gTTS
 
 class VoiceAPI:
     VoiceList = [
@@ -68,9 +63,9 @@ class VoiceAPI:
         )
         return res.content
 
-    def text_to_audio( self, text: str ) -> bytes:
+    def text_to_audio( self, text: str, lang='ja' ) -> bytes:
         if self.speaker<0:
-            tts = gTTS(text=text, lang=Model.lang[:2],lang_check=False )
+            tts = gTTS(text=text, lang=lang,lang_check=False )
             with BytesIO() as buffer:
                 tts.write_to_fp(buffer)
                 mp3 = buffer.getvalue()
