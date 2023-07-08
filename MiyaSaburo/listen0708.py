@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Type
+from typing import Type
 import sys
 import os
 from io import BytesIO
@@ -14,7 +14,6 @@ import queue
 from langchain import LLMMathChain
 import pyaudio
 import speech_recognition as sr
-from gtts import gTTS
 
 import tkinter as tk
 from tkinter import ttk as ttk
@@ -23,7 +22,11 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-import webSearchTool
+from MiyaSaburo.libs.BotCustomCallbackHandler import BotCustomCallbackHandler
+from MiyaSaburo.libs.VoiceAPI import VoiceAPI
+from MiyaSaburo.tools.QuietTool import QuietTool
+from MiyaSaburo.tools.webSearchTool import webSearchTool
+
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory
 from langchain.memory import ConversationTokenBufferMemory
@@ -37,15 +40,7 @@ from langchain.prompts.chat import (
     AIMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.schema import HumanMessage, SystemMessage
-from langchain.tools.base import BaseTool
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.callbacks.manager import (
-    AsyncCallbackManagerForToolRun,
-    CallbackManagerForToolRun,
-    CallbackManager
-)
-from langchain.schema import AgentAction, AgentFinish, LLMResult
+from langchain.schema import SystemMessage
 
 # 再生関係
 import pygame
@@ -670,132 +665,6 @@ def process_audio():
         print("[process_audio]exit")
         plot_queue.put(None)
 
-class TaskCancelException(Exception):
-    def __init__(self,mesg):
-        super().__init__(mesg)
-
-class MyCustomCallbackHandler(BaseCallbackHandler):
-    """Custom CallbackHandler."""
-    def __init__(self):
-        super().__init__()
-        self._buffer=''
-        self.message_callback = None
-        self.action_callback = None
-        self.status=0
-        self.talk_id = 0
-
-    def flush(self):
-        if len(self._buffer)>0:
-            self.log('flush',self._buffer)
-            if self.message_callback is not None:
-                self.message_callback(self.talk_id,self._buffer)
-            self._buffer = ''
-
-    def action(self, mesg ):
-        self.log('action',mesg)
-        if self.action_callback is not None:
-            self.action_callback(self.talk_id,mesg)
-
-    def log(self,grp,text):
-        print(f"[HDR#{self.talk_id}:{grp}]{text}")
-
-    def is_cancel(self,mesg):
-        global Model
-        if self.talk_id != Model.talk_id:
-            self.log( f"{mesg}_cancel","" )
-            #raise TaskCancelException(f"task {self.talk_id} is cancelled")
-            return True
-        return False
-
-    def on_llm_start( self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any ) -> None:
-        """LLM の処理開始。prompt の内容を出力"""
-        if self.is_cancel('on_llm_start'):
-            return
-        p = "\n".join(prompts)
-        #self.log('llm_start',"---Prompts---\n"+p+"\n------------")
-        self.log('llm_start',"")
-
-
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        """LLM の処理終了。何もしない"""
-        self.flush()
-
-    def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
-        """LLM から新しい Token が出力。いわゆる Streaming の部分"""
-        if self.is_cancel("on_llm_new_token"):
-            return
-        if token and len(token)>0:
-            self._buffer += token
-            for sep in '。？！!?\n':
-                if sep in token:
-                    self.flush()
-                    self.status=2
-                    break
-
-    def on_agent_action( self, action: AgentAction, color: Optional[str] = None, **kwargs: Any ) -> Any:
-        """Agent がアクションを実施。Agent の Streaming は大体ここ"""
-        mesg = f"AIが{action.tool}({action.tool_input})を実行します"
-        if self.is_cancel("on_agent_action"):
-            return
-        self.action(mesg)
-
-    def on_agent_finish( self, finish: AgentFinish, color: Optional[str] = None, **kwargs: Any ) -> None:
-        """Agent が終了した時に呼び出される。ログの出力"""
-        pass
-
-    def on_tool_start( self, serialized: Dict[str, Any], input_str: str, **kwargs: Any ) -> None:
-        """Tool の実行が開始"""
-        if self.is_cancel('on_tool_start'):
-            return
-
-    def on_tool_end( self, output: str, color: Optional[str] = None, observation_prefix: Optional[str] = None, llm_prefix: Optional[str] = None, **kwargs: Any ) -> None:
-        """Tool の使用が終了。Final Answer でなければ[Observation]が出力"""
-        pass
-
-    def on_tool_error( self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any ) -> None:
-        """Tool の使用でエラーが発生"""
-        pass
-
-    def on_text(self, text: str, color: Optional[str] = None, end: str = "", **kwargs: Optional[str] ) -> None:
-        """Agent の終了時に呼び出される。完全に終了したとき（？）。結果の出力"""
-        pass
-
-def end_quiet():
-    global quiet_timer
-    quiet_timer = None
-    print("[LLM] quiet cleard")
-
-def start_quiet(query):
-    global quiet_timer
-
-    if quiet_timer is not None:
-        quiet_timer.cancel()
-    
-    try:
-        sec = int(query)
-    except:
-        sec = 15
-    
-    quiet_timer = threading.Timer(sec,end_quiet)
-    quiet_timer.start()
-    print(f"[LLM] quiet {sec}sec")
-    return f"{sec}秒間、静かにしましょう"
-
-class QuietTool(BaseTool):
-    name = "QuietTool"
-    description = (
-        "Used when you want a little silence."
-        "The input is the number of seconds you want to be quiet."
-    )
-
-    def _run( self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
-        """Use the tool."""
-        return start_quiet(query)
-
-    async def _arun(self, query: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None) -> str:
-        """Use the tool asynchronously."""
-        raise NotImplementedError("custom_search does not support async")
-
 CANCEL_WARDS = ("きゃんせる","キャンセル","ちょっと待っ","停止","違う違う","stop","abort","cancel")
 def is_cancel(text):
     for w in CANCEL_WARDS:
@@ -859,7 +728,7 @@ def LLM_process():
             "system_message": system_message,
             "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory")],
         }
-        func_memory = ConversationBufferWindowMemory( k=1, memory_key="memory",return_messages=True)
+        func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
         #func_memory = ConversationBufferWindowMemory( k=5 )
         #func_memory = ConversationBufferMemory(memory_key="memory", return_messages=True)
 
@@ -891,7 +760,7 @@ def LLM_process():
                 # 現在の時刻を取得
                 formatted_time = formatted_datetime()
                 system_message.content = system_prompt + ' Use language of '+Model.lang + " ( current time: " + formatted_time + " " + current_location +")"
-                callback_hdr = MyCustomCallbackHandler()
+                callback_hdr = BotCustomCallbackHandler()
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
                 callback_hdr.action_callback = tool_callback
@@ -974,88 +843,6 @@ def LLM_process():
         print("[LLM]exit")
         wave_queue.put(None)
 
-import requests
-import json
-
-class VoiceAPI:
-    VoiceList = [
-        ( "gTTS", -1 ),
-        ( "VOICEVOX:四国めたん [あまあま]", 0 ),
-        ( "VOICEVOX:四国めたん [ノーマル]", 2 ),
-        ( "VOICEVOX:四国めたん [セクシー]", 4 ),
-        ( "VOICEVOX:四国めたん [ツンツン]", 6 ),
-        ( "VOICEVOX:ずんだもん [あまあま]", 1 ),
-        ( "VOICEVOX:ずんだもん [ノーマル]", 3 ),
-        ( "VOICEVOX:ずんだもん [セクシー]", 5 ),
-        ( "VOICEVOX:ずんだもん [ツンツン]", 7 ),
-        ( "VOICEVOX:春日部つむぎ [ノーマル]", 8 ),
-        ( "VOICEVOX:波音リツ [ノーマル]", 9 ),
-        ( "VOICEVOX:雨晴はう [ノーマル]", 10 ),
-        ( "VOICEVOX:玄野武宏 [ノーマル]", 11 ),
-        ( "VOICEVOX:白上虎太郎 [ふつう]", 11 ),
-        ( "VOICEVOX:白上虎太郎 [わーい]", 32 ),
-        ( "VOICEVOX:白上虎太郎 [びくびく]", 33 ),
-        ( "VOICEVOX:白上虎太郎 [おこ]", 34 ),
-        ( "VOICEVOX:白上虎太郎 [びえーん]", 36 ),
-        ( "VOICEVOX:もち子(cv 明日葉よもぎ)[ノーマル]", 20 ),
-    ]
-    def __init__(self):
-        self.speaker = -1
-
-    def _post_audio_query(self, text: str) -> dict:
-        params = {'text': text, 'speaker': self.speaker}
-        res : requests.Response = requests.post('http://localhost:50021/audio_query', params=params)
-        res.content
-        return res.json()
-
-    def _post_synthesis(self, audio_query_response: dict) -> bytes:
-        params = {'speaker': self.speaker}
-        headers = {'content-type': 'application/json'}
-        audio_query_response_json = json.dumps(audio_query_response)
-        res = requests.post(
-            'http://localhost:50021/synthesis',
-            data=audio_query_response_json,
-            params=params,
-            headers=headers
-        )
-        return res.content
-    
-    def _post_audio_query_b(self, text: str) -> bytes:
-
-        params = {'text': text, 'speaker': self.speaker}
-        res1 : requests.Response = requests.post('http://localhost:50021/audio_query', params=params)
-
-        params = {'speaker': self.speaker}
-        headers = {'content-type': 'application/json'}
-        res = requests.post(
-            'http://localhost:50021/synthesis',
-            data=res1.content,
-            params=params,
-            headers=headers
-        )
-        return res.content
-
-    def text_to_audio( self, text: str ) -> bytes:
-        if self.speaker<0:
-            tts = gTTS(text=text, lang=Model.lang[:2],lang_check=False )
-            with BytesIO() as buffer:
-                tts.write_to_fp(buffer)
-                mp3 = buffer.getvalue()
-                del tts
-                return mp3
-        else:
-            # start1 = int(time.time()*1000)
-            # req_param: dict = self._post_audio_query(text)
-            # start2 = int(time.time()*1000)
-            # wave: bytes = self._post_synthesis( req_param )
-            # start3 = int(time.time()*1000)
-            # print(f"[VOICEVOX] {start2-start1} {start3-start2}")
-            start1 = int(time.time()*1000)
-            wave: bytes = self._post_audio_query_b( text )
-            start3 = int(time.time()*1000)
-            print(f"[VOICEVOX] {start3-start1}")
-            return wave
-    
 def wave_process():
     """テキストから音声へ変換"""
     global running
@@ -1355,7 +1142,7 @@ class AppWindow(tk.Tk):
         enable_button = tk.Button(sub_frame, text="Off" )
         enable_button.pack(side=tk.BOTTOM,padx=2,pady=2)
 
-        def llm_update_status(state):
+        def update_indicator_status(state):
             color='gray'
             if state.get_error():
                 color='red'
@@ -1368,38 +1155,40 @@ class AppWindow(tk.Tk):
                 enable_button.config( text="On" )
             else:
                 enable_button.config( text="Off" )
-        model_state_1.callback = llm_update_status
+        model_state_1.callback = update_indicator_status
 
         if model_state_2 is not None:
             indicator2 = tk.Label(sub_frame, width=5, height=1, bg="gray", text=model_state_2.title)
             indicator2.pack(side=tk.TOP,padx=2,pady=2)
-            def llm_update_status2(state):
+            def update_indicator_status2(state):
                 color='gray'
                 if state.get_running():
                     color='blue'
                 elif state.get_enable():
                     color='green'
                 indicator2.config( bg=color)
-            model_state_2.callback = llm_update_status2
+            model_state_2.callback = update_indicator_status2
 
-        def llm_on_off():
+        def set_enable_indicator():
             enable = (enable_button['text'] == "On")
             model_state_1.set_enable( not enable)
             if model_state_2 is not None:
                 model_state_2.set_enable( not enable)
-        enable_button.config( command=llm_on_off )
+        enable_button.config( command=set_enable_indicator )
         return sub_frame
 
 def main():
     global Model,App
     if not os.environ.get("OPENAI_API_KEY"):
-        try:
-            with open('../openai_api_key.txt','r') as cfg:
-                k = cfg.readline()
-                if k is not None and len(k)>0:
-                    os.environ["OPENAI_API_KEY"] = k
-        except:
-            pass
+        for subdir in ('..', '../..'):
+            try:
+                with open(subdir + '/openai_api_key.txt','r') as cfg:
+                    k = cfg.readline()
+                    if k is not None and len(k)>0:
+                        os.environ["OPENAI_API_KEY"] = k
+                        break
+            except:
+                pass
     if not os.environ.get("OPENAI_API_KEY"):
         print("ERROR: OPENAI_API_KEY is blank")
         return
