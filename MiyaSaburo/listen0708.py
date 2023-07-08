@@ -696,8 +696,8 @@ def LLM_process():
         def tool_callback(talk_id,text):
             App.chat_hist.insert(tk.END,'\n'+text+"\n")
             App.chat_hist.see('end')
-        #openai_model='gpt-3.5-turbo'
-        openai_model='gpt-4'
+        openai_model='gpt-3.5-turbo'
+        #openai_model='gpt-4'
 
         llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
         # ツールの準備
@@ -1178,6 +1178,12 @@ class AppWindow(tk.Tk):
         return sub_frame
 
 def main():
+    os.makedirs("logs")
+    import logging
+    logger = logging.getLogger("openai")
+    logger.setLevel( logging.DEBUG )
+    fh = logging.FileHandler("logs/openai.log")
+    logger.addHandler(fh)
     global Model,App
     if not os.environ.get("OPENAI_API_KEY"):
         for subdir in ('..', '../..'):
