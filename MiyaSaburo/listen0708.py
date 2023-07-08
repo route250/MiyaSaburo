@@ -117,45 +117,48 @@ class AppModel(threading.Thread):
         self.cross_hist = value_hist(5)
 
     def run(self):
-        global Model, App
-        global running
-        global quiet_timer
-        quiet_timer = None
-        Model.play_talk_id = 0
+        try:
+            global Model, App
+            global running
+            global quiet_timer
+            quiet_timer = None
+            Model.play_talk_id = 0
 
-        default_mic = Model.getMic()
-        if default_mic is None:
-            return
-        print(f"選択されたマイク: {default_mic[0]}, デバイスインデックス: {default_mic[1]}")
+            default_mic = Model.getMic()
+            if default_mic is None:
+                return
+            print(f"選択されたマイク: {default_mic[0]}, デバイスインデックス: {default_mic[1]}")
 
-        running = True
-        threads = [
-            threading.Thread(target=recoard_audio),
-            threading.Thread(target=process_audio),
-            threading.Thread(target=plot_audio),
-            threading.Thread(target=LLM_process),
-            threading.Thread(target=wave_process),
-            threading.Thread(target=talk_process),
-        ]
-        for thread in threads:
-            thread.setDaemon(True)
-            thread.start()
-        i=0
-        while running and App:
-            if i==0:
-                App.set_ydata(self.plot_audio_data,self.plot_energy_data,self.plot_cross_data)
-            App.audio_level_1.config(text=f"last:{self.energy_hist.last:4d} / {self.cross_hist.last:4d}")
-            App.audio_level_4.config(text=f" min:{self.energy_hist.min:4d} / {self.cross_hist.min:4d}")
-            App.audio_level_2.config(text=f"ave.:{self.energy_hist.ave:4d} / {self.cross_hist.ave:4d}")
-            App.audio_level_3.config(text=f" max:{self.energy_hist.max:4d} / {self.cross_hist.max:4d}")
+            running = True
+            threads = [
+                threading.Thread(target=recoard_audio),
+                threading.Thread(target=process_audio),
+                threading.Thread(target=plot_audio),
+                threading.Thread(target=LLM_process),
+                threading.Thread(target=wave_process),
+                threading.Thread(target=talk_process),
+            ]
+            for thread in threads:
+                thread.setDaemon(True)
+                thread.start()
+            i=0
+            while running and App:
+                if i==0:
+                    App.set_ydata(self.plot_audio_data,self.plot_energy_data,self.plot_cross_data)
+                App.audio_level_1.config(text=f"last:{self.energy_hist.last:4d} / {self.cross_hist.last:4d}")
+                App.audio_level_4.config(text=f" min:{self.energy_hist.min:4d} / {self.cross_hist.min:4d}")
+                App.audio_level_2.config(text=f"ave.:{self.energy_hist.ave:4d} / {self.cross_hist.ave:4d}")
+                App.audio_level_3.config(text=f" max:{self.energy_hist.max:4d} / {self.cross_hist.max:4d}")
 
-            time.sleep(0.2)
-            i = (i+1) % 3
+                time.sleep(0.2)
+                i = (i+1) % 3
 
-        print("[Thread]waiting...")
-        for thread in threads:
-            thread.join(timeout=0.2)
-        print("[Thread]stopped")
+            print("[Thread]waiting...")
+            for thread in threads:
+                thread.join(timeout=0.2)
+            print("[Thread]stopped")
+        except Exception as ex:
+            print(ex)
 
     def next_id(self):
         i = self.__count
@@ -1178,7 +1181,7 @@ class AppWindow(tk.Tk):
         return sub_frame
 
 def main():
-    os.makedirs("logs")
+    os.makedirs("logs",exist_ok=True)
     import logging
     logger = logging.getLogger("openai")
     logger.setLevel( logging.DEBUG )
