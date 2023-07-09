@@ -12,6 +12,9 @@ class CustomChatMessageHistory(ChatMessageHistory):
         "手伝いできることがあれば教えてください",
         "お手伝いできることはありますか",
         "お手伝いいたします",
+        "お手伝いできることがあればお知らせください",
+        "お手伝いできるかもしれません",
+        "お手伝いできるかと思います",
 
         "質問やサポートがあればお知らせください",
         "困っているのか教えてください",
@@ -23,7 +26,7 @@ class CustomChatMessageHistory(ChatMessageHistory):
         "お申し付けください",
         "伝いが必要な場合はお知らせください",
         "遠慮なくお知らせください",
-        "お気軽にお聞きください","お気軽にお聞かせください",
+        "お気軽にお聞きください","お気軽にお聞かせください","どんなことでも結構ですよ","お気軽にお話しください",
         "サポートいたします",
         "良い一日をお過ごしください",
 
@@ -32,14 +35,14 @@ class CustomChatMessageHistory(ChatMessageHistory):
     _pattern = re.compile(r"[、？！]")
 
     def convert(self, message: str) -> str:
-        lines = message.split("。")
+        lines = message.split("(。)")
         results = []
         for line in lines:
-            line = self._pattern.sub("", line)
-            if line and not line.endswith(self._IGNORE_TUPLE):
+            buf = self._pattern.sub("", line.strip(" 。\n"))
+            if buf and not buf.endswith(self._IGNORE_TUPLE):
                 results.append(line)
         if results:
-            return "。".join(results) + "。"
+            return "".join(results)
         else:
             return ""
 

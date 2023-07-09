@@ -25,6 +25,7 @@ from matplotlib.figure import Figure
 from libs.VoiceAPI import VoiceAPI
 from tools.QuietTool import QuietTool
 from tools.webSearchTool import WebSearchTool
+from libs.StrList import StrList
 
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
@@ -44,6 +45,7 @@ from langchain.schema import BaseMessage, BaseChatMessageHistory
 from libs.CustomChatMessageHistory import CustomChatMessageHistory
 # 再生関係
 import pygame
+import wave
 
 class ModuleState:
     def __init__(self,title):
@@ -117,6 +119,12 @@ class AppModel(threading.Thread):
         self.energy_hist = value_hist(5)
         self.cross_hist = value_hist(5)
 
+        self.recog_energy = 0
+        self.recog_min_energy = 0
+        self.recog_limit_energy = 0
+        self.recog_buffer : StrList = StrList()
+        self.recog_detect : StrList = StrList()
+
     def run(self):
         try:
             global Model, App
@@ -150,6 +158,17 @@ class AppModel(threading.Thread):
                 App.audio_level_4.config(text=f" min:{self.energy_hist.min:4d} / {self.cross_hist.min:4d}")
                 App.audio_level_2.config(text=f"ave.:{self.energy_hist.ave:4d} / {self.cross_hist.ave:4d}")
                 App.audio_level_3.config(text=f" max:{self.energy_hist.max:4d} / {self.cross_hist.max:4d}")
+
+                App.recog_fail_energy.config(text=f"fail:{self.recog_energy}")
+                App.recog_min_energy.config(text=f"success:{self.recog_min_energy}")
+                App.recog_limit_energy.config(text=f"low:{self.recog_limit_energy}")
+
+                if self.recog_buffer.is_update():
+                    App.recog_buffer.delete(1.0,tk.END)
+                    App.recog_buffer.insert(tk.END,self.recog_buffer.get_all("\n"))
+                if self.recog_detect.is_update():
+                    App.recog_detect.delete(1.0,tk.END)
+                    App.recog_detect.insert(tk.END,self.recog_detect.get_all("\n"))
 
                 time.sleep(0.2)
                 i = (i+1) % 3
@@ -196,6 +215,9 @@ plot_queue = queue.Queue()
 llm_queue = queue.Queue()
 wave_queue = queue.Queue()
 talk_queue = queue.Queue()
+
+MARK_START="<Start>"
+MARK_END="<End>"
 
 ## -----------------------------------------------------------------------
 ## Utils
@@ -253,12 +275,7 @@ def find_available_microphones():
     print("[MIC]end")
     return microphones
 
-def create_sound(Hz1=440,time=0.3):
-    #再生時間を指定
-    #time=2
-    #周波数を指定
-    #Hz1=300
-    #再生時間を設定
+def create_soundxx(Hz1=440,time=0.3):
     arr_size = int(44100*time*2)
     x=np.linspace(0,arr_size,arr_size)
     y=np.sin(2*np.pi*Hz1/44100*x)*10000
@@ -268,6 +285,29 @@ def create_sound(Hz1=440,time=0.3):
     pygame.mixer.init()
     sound = pygame.sndarray.make_sound(sound_arr)
     return sound
+
+def create_sound(Hz1=440, time=0.3):
+    #再生時間を指定
+    #time=2
+    #周波数を指定
+    #Hz1=300
+    #再生時間を設定
+    arr_size = int(44100 * time * 2)
+    x = np.linspace(0, arr_size, arr_size)
+    y = np.sin(2 * np.pi * Hz1 / 44100 * x) * 10000
+    y = y.astype(np.int16)
+    xtime = x / 44100
+    sound_arr = y.reshape(int(y.shape[0] / 2), 2)
+
+    # wavファイルを作成してバイナリ形式で保存する
+    wav_io = BytesIO()
+    with wave.open(wav_io, "wb") as wav_file:
+        wav_file.setnchannels(2)  # ステレオ (左右チャンネル)
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(44100)  # サンプリングレート
+        wav_file.writeframes(sound_arr.tobytes())
+    wav_io.seek(0)  # バッファの先頭にシーク
+    return wav_io.read()
 
 def split_string(text):
     # 文字列を改行で分割
@@ -552,18 +592,18 @@ def process_audio():
                         Model.recog_state.set_running(False)
 
                     if raw_text == '':
-                        App.rec_info1.config(text=f"fail:{energy}")
+                        Model.recog_energy = energy
                     else:
                         shift_set(recog_hist,audio_energy)
                         recog_min_energy = np.min(recog_hist)
-                        App.rec_info2.config(text=f"success:{recog_min_energy}")
+                        Model.recog_min_energy = recog_min_energy
                         recog_limit_energy = int((recog_min_energy-AppModel.AUDIO_ENERGY_TRIGGER)*0.6)+AppModel.AUDIO_ENERGY_TRIGGER
-                        App.rec_info3.config(text=f"low:{recog_limit_energy}")
+                        Model.recog_limit_energy = recog_limit_energy
 
                     if raw_text == '':
                         if detect.text == '':
                             # 無音が続いている
-                            App.rec_1.delete(1.0,tk.END)
+                            Model.recog_buffer.clear()
                             detect.d_continue(buffer_len)
                             if detect.count >= accept_count:
                                 #3回同じ内容が来た
@@ -572,7 +612,7 @@ def process_audio():
                                 if sended:
                                     print(f"[REC] blank NL {in_talk},{detect.count}/{accept_count}")
                                     llm_queue.put((in_talk,"\n"))
-                                    App.detect_text.delete(1.0,tk.END)
+                                    Model.recog_detect.clear()
                                     sended=False
                             #     else:
                             #         print(f"[REC] blank {detect.count}/{accept_count}")
@@ -583,8 +623,8 @@ def process_audio():
                             print("[REC] bl ---> {},{}".format(in_talk,detect.text))
                             llm_queue.put((in_talk,detect.text))
                             sended=True
-                            App.rec_1.delete(1.0,tk.END)
-                            App.detect_text.insert(tk.END,detect.text)
+                            Model.recog_buffer.clear()
+                            Model.recog_detect.append(detect.text)
                             pos = detect.end
                             detect.d_end(buffer_len)
                             print("[REC]___")
@@ -593,15 +633,15 @@ def process_audio():
                             # 初の検出
                             llm_queue.put((in_talk," "))
                             detect.d_start(pos,buffer_len,raw_text)
-                            App.rec_1.insert(tk.END,raw_text+"\n")
+                            Model.recog_buffer.append(raw_text)
                             if confidence <0.95:
                                 print("[REC]start {}".format(raw_text))
                             else:
                                 print("[REC] 1st ---> {},{}".format(in_talk,detect.text))
                                 llm_queue.put((in_talk,detect.text))
                                 sended=True
-                                App.rec_1.delete(1.0,tk.END)
-                                App.detect_text.insert(tk.END,detect.text)
+                                Model.recog_buffer.clear()
+                                Model.recog_detect.append(detect.text)
                                 pos = detect.end
                                 detect.d_end(buffer_len)
                         else:
@@ -611,14 +651,14 @@ def process_audio():
                                 if detect.count < accept_count:
                                     print("[REC]{} {}".format(detect.count,raw_text))
                                     detect.d_continue(buffer_len)
-                                    App.rec_1.insert(tk.END,raw_text+"\n")
+                                    Model.recog_buffer.append(raw_text)
                                 else:
                                     #3回同じ内容が来た
                                     print("[REC] eq ===> {} => {},{}".format(detect.count,in_talk,detect.text))
                                     llm_queue.put((in_talk,detect.text))
                                     sended=True
-                                    App.rec_1.delete(1.0,tk.END)
-                                    App.detect_text.insert(tk.END,detect.text)
+                                    Model.recog_buffer.clear()
+                                    Model.recog_detect.append(detect.text)
                                     pos = detect.end0
                                     detect.d_end(buffer_len)
                             elif raw_text.startswith(detect.text):
@@ -630,21 +670,21 @@ def process_audio():
                                 pos = detect.end0
                                 detect.d_start(pos,buffer_len,raw_text)
                                 print("[REC]split {}".format(raw_text))
-                                App.rec_1.insert(tk.END,raw_text+"\n")
+                                Model.recog_buffer.append(raw_text)
                             elif pos<=0:
                                 # 先頭部分だけ一致した
                                 print("[REC] over ===> {},{}".format(in_talk,detect.text))
                                 llm_queue.put((in_talk,detect.text))
                                 sended=True
-                                App.rec_1.delete(1.0,tk.END)
-                                App.detect_text.insert(tk.END,detect.text)
+                                Model.recog_buffer.clear()
+                                Model.recog_detect.append(detect.text)
                                 pos = detect.end0
                                 detect.d_end(buffer_len)
                             else:
                                 # やりなおし？
                                 print("[REC]reset {}".format(raw_text))
                                 detect.d_start(pos,buffer_len,raw_text)
-                                App.rec_1.insert(tk.END,raw_text+"\n")
+                                Model.recog_buffer.append(raw_text)
 
                 if in_talk != next_talk:
                     if detect.text != '':
@@ -654,7 +694,7 @@ def process_audio():
                     if sended:
                         print("[REC] tk ===> \\nl")
                         llm_queue.put((in_talk,"\n"))
-                        App.detect_text.delete(1.0,tk.END)
+                        Model.recog_detect.clear()
                         sended=False
                     in_talk = next_talk
                     in_count = 0
@@ -688,24 +728,12 @@ def LLM_process():
             "お手伝いできることがありますか？","他に何かお手伝いできることはありますか？",
             "どのようなお話しをしましょうか？"]
         query=""
-        # エージェントの準備
-        def token_callback(talk_id,text):
-            for word in remove_word:
-                if text.endswith(word):
-                    text = text[:-len(word)]
-            if len(text)>0:
-                print(f"[LLM]put {text}")
-                wave_queue.put( (talk_id,text) )
-
-        def tool_callback(talk_id,text):
-            App.chat_hist.insert(tk.END,'\n'+text+"\n")
-            App.chat_hist.see('end')
         openai_model='gpt-3.5-turbo'
         #openai_model='gpt-4'
 
-        chat_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
+        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=openai_model)
         # ツールの準備
-        llm_math_chain = LLMMathChain.from_llm(llm=chat_llm,verbose=False)
+        llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False)
         web_tool = WebSearchTool()
         tools=[]
         tools += [
@@ -733,22 +761,22 @@ def LLM_process():
             "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory_hanaya")],
         }
         #func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
-        func_memory = ConversationSummaryBufferMemory(llm=chat_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True)
-        func_memory.chat_memory : BaseChatMessageHistory= CustomChatMessageHistory() #Field(default_factory=ChatMessageHistory)
+        mem_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=openai_model)
+        func_memory = ConversationSummaryBufferMemory(llm=mem_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True)
+        mx : CustomChatMessageHistory = CustomChatMessageHistory()
+        func_memory.chat_memory : BaseChatMessageHistory=mx #Field(default_factory=ChatMessageHistory)
 
-
-        # エージェントの準備
-        agent_chain = initialize_agent(
-            tools, 
-            chat_llm, 
-            agent=AgentType.OPENAI_FUNCTIONS,
-            verbose=False, 
-            memory=func_memory,
-            agent_kwargs=agent_kwargs, 
-            handle_parsing_errors=_handle_error
-        )
         current_location = web_tool.get_weather()
-        # run_manager.stop()
+        # エージェントの準備
+        def token_callback(talk_id,text):
+            text = mx.convert(text)
+            if len(text)>0:
+                print(f"[LLM]put {text}")
+                wave_queue.put( (talk_id,text) )
+
+        def tool_callback(talk_id,text):
+            App.chat_hist.insert(tk.END,'\n'+text+"\n")
+            App.chat_hist.see('end')
         def llm_run(query):
             global Model
             if not Model.llm_state.get_enable():
@@ -769,6 +797,17 @@ def LLM_process():
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
                 callback_hdr.action_callback = tool_callback
+                agent_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
+                # エージェントの準備
+                agent_chain = initialize_agent(
+                    tools, 
+                    agent_llm, 
+                    agent=AgentType.OPENAI_FUNCTIONS,
+                    verbose=False, 
+                    memory=func_memory,
+                    agent_kwargs=agent_kwargs, 
+                    handle_parsing_errors=_handle_error
+                )
                 res_text = agent_chain.run(input=query,callbacks=[callback_hdr])
                 print(f"[LLM] GPT text:{res_text}")
             except KeyboardInterrupt as ex:
@@ -779,7 +818,10 @@ def LLM_process():
                 print(ex)
             finally:
                 Model.llm_state.set_running(False)
+                wave_queue.put( (callback_hdr.talk_id,MARK_END) )
                 del callback_hdr
+                del agent_chain
+                del agent_llm
         try:
             last_queue=""
             thread :threading.Thread = None
@@ -800,6 +842,7 @@ def LLM_process():
                     App.llm_send_text.insert(1.0,query)
 
                 if thread is not None and not thread.is_alive():
+                    del thread
                     thread = None
                     if Model.interrupt_mode == 'keyword':
                         query = ""
@@ -811,7 +854,7 @@ def LLM_process():
                         #start
                         last_queue = query
                         query = ""
-                        Model.sound1.play()
+                        wave_queue.put( (Model.talk_id,MARK_START) )
                         App.llm_send_text.delete(1.0,tk.END)
                         App.chat_hist.insert(tk.END,"\n\n[YOU]"+last_queue+"\n")
                         App.chat_hist.see('end')
@@ -837,11 +880,10 @@ def LLM_process():
                             query = ""
                         else:
                             query = last_queue + " " + query
+                        wave_queue.put( (cancel_id,MARK_END) )
                         App.llm_send_text.delete(1.0,'end')
                         App.llm_send_text.insert(1.0,query)
-
                 now = int(time.time()*1000)
-                time.sleep(0.5)
         finally:
             pass
     finally:
@@ -863,6 +905,12 @@ def wave_process():
             if item is None:
                 break
             talk_id, text = item
+            if text == MARK_START:
+                talk_queue.put( (talk_id,text,Model.sound1) )
+                continue
+            if text == MARK_END:
+                talk_queue.put( (talk_id,text,Model.sound2) )
+                continue
             if talk_id != Model.talk_id or len(text)==0:
                 continue
 
@@ -919,12 +967,15 @@ def talk_process():
 
                     try:
                         mp3_buffer = BytesIO(audio)
+                        pygame.mixer.music.pause()
+                        pygame.mixer.music.unload()
                         pygame.mixer.music.load(mp3_buffer)
                         # 音声を再生
                         Model.talk_state.set_running(True)
                         App.talk_text.insert(tk.END,text)
-                        App.chat_hist.insert(tk.END,text)
-                        App.chat_hist.see('end')
+                        if text != MARK_START and text != MARK_END:
+                            App.chat_hist.insert(tk.END,text)
+                            App.chat_hist.see('end')
                         Model.play_talk_id = talk_id
                         print(f"[TALK] start talk_id:{Model.play_talk_id}")
                         pygame.mixer.music.play()
@@ -947,7 +998,6 @@ def talk_process():
                     if Model.play_talk_id != 0 and (now-end_time)>200:
                         print(f"[TALK] end talk_id:{Model.play_talk_id}")
                         Model.play_talk_id = 0
-                        Model.sound2.play()
                     if not Model.talk_state.get_enable() and init != 0:
                         init = 0
                     time.sleep(0.2)
@@ -1036,19 +1086,19 @@ class AppWindow(tk.Tk):
         detect_frame3 = tk.Frame(detect_frame,relief=tk.SOLID,borderwidth=1)
         detect_frame3.pack(side=tk.RIGHT, fill=tk.Y)
         # Labelの作成
-        self.rec_info1 = tk.Label(detect_frame3, width=12, height=1)
-        self.rec_info1.pack(side=tk.TOP)
-        self.rec_info2 = tk.Label(detect_frame3, width=12, height=1)
-        self.rec_info2.pack(side=tk.TOP)
-        self.rec_info3 = tk.Label(detect_frame3, width=12, height=1)
-        self.rec_info3.pack(side=tk.TOP)
+        self.recog_fail_energy = tk.Label(detect_frame3, width=12, height=1)
+        self.recog_fail_energy.pack(side=tk.TOP)
+        self.recog_min_energy = tk.Label(detect_frame3, width=12, height=1)
+        self.recog_min_energy.pack(side=tk.TOP)
+        self.recog_limit_energy = tk.Label(detect_frame3, width=12, height=1)
+        self.recog_limit_energy.pack(side=tk.TOP)
 
         # テキストボックスの作成
-        self.rec_1 = tk.Text(detect_frame, height=5,width=40)
-        self.rec_1.pack(side=tk.LEFT)
+        self.recog_buffer = tk.Text(detect_frame, height=5,width=40)
+        self.recog_buffer.pack(side=tk.LEFT)
         # テキストボックスの作成
-        self.detect_text = tk.Text(detect_frame, height=5,width=40)
-        self.detect_text.pack(side=tk.LEFT)
+        self.recog_detect = tk.Text(detect_frame, height=5,width=40)
+        self.recog_detect.pack(side=tk.LEFT)
 
         # ボタンを配置するフレームの作成
         llm_frame = tk.Frame(self,relief=tk.SOLID)
