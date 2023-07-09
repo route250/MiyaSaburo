@@ -102,7 +102,8 @@ class AppModel(threading.Thread):
         self.wave_state = ModuleState('WAVE')
         self.talk_state = ModuleState('TALK')
         self.voice_api = VoiceAPI()
-        self.lang = AppModel.LANG_LIST[0]
+        self.lang_in = AppModel.LANG_LIST[0]
+        self.lang_out = AppModel.LANG_LIST[0]
         self.interrupt_mode = AppModel.INTERRUPT_LIST[0]
         self.sound1 = create_sound(440,0.3)
         self.sound2 = create_sound(220,0.3)
@@ -573,7 +574,7 @@ def process_audio():
                         if limit1 and limit2:
                             Model.recog_state.set_running(True)
                             audio_data = sr.AudioData( buffer[pos:], RATE, WIDTH)
-                            raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang, with_confidence=True)
+                            raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang_in, with_confidence=True)
                             #print(f"[REC] confidence {confidence}")
                             #actual_result = recognizer.recognize_google(audio_data, language="ja-JP", show_all=True)
                             #if not isinstance(actual_result, dict) or len(actual_result.get("alternative", [])) == 0:
@@ -792,7 +793,7 @@ def LLM_process():
                 Model.llm_state.set_running(True)
                 # 現在の時刻を取得
                 formatted_time = formatted_datetime()
-                system_message.content = system_prompt + ' Use language of '+Model.lang + " ( current time: " + formatted_time + " " + current_location +")"
+                system_message.content = system_prompt + ' Use language of '+Model.lang_out + " ( current time: " + formatted_time + " " + current_location +")"
                 callback_hdr = BotCustomCallbackHandler(Model)
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
@@ -922,7 +923,7 @@ def wave_process():
                     # テキストを音声に変換
                     Model.wave_state.set_running(True)
                     print(f"[WAVE] create audio {text}")
-                    audio_bytes :bytes = Model.voice_api.text_to_audio(text,lang=Model.lang[:2])
+                    audio_bytes :bytes = Model.voice_api.text_to_audio(text,lang=Model.lang_out[:2])
                     talk_queue.put( (talk_id,text,audio_bytes) )
                 except Exception as e:
                     print(e)
@@ -1085,6 +1086,14 @@ class AppWindow(tk.Tk):
 
         detect_frame3 = tk.Frame(detect_frame,relief=tk.SOLID,borderwidth=1)
         detect_frame3.pack(side=tk.RIGHT, fill=tk.Y)
+        # ドロップダウンリストの作成
+        lang_in_dropdown = ttk.Combobox(detect_frame3, values=AppModel.LANG_LIST, state="readonly", width=10)
+        lang_in_dropdown.pack(side=tk.TOP)
+        # ドロップダウンリストの選択が変更されたときのイベントハンドラを設定
+        def on_lang_in_selection(event):
+            Model.lang_in = lang_in_dropdown.get()
+        lang_in_dropdown.bind("<<ComboboxSelected>>", on_lang_in_selection)
+        lang_in_dropdown.current(0)
         # Labelの作成
         self.recog_fail_energy = tk.Label(detect_frame3, width=12, height=1)
         self.recog_fail_energy.pack(side=tk.TOP)
@@ -1124,12 +1133,13 @@ class AppWindow(tk.Tk):
         voice_dropdown = ttk.Combobox(talk_frame3, values=[voice[0] for voice in VoiceAPI.VoiceList], state="readonly", width=40)
         voice_dropdown.pack(side=tk.TOP)
         # ドロップダウンリストの選択が変更されたときのイベントハンドラを設定
-        def on_lang_selection(event):
+        def on_lang_out_selection(event):
             selected_item = voice_dropdown.get()
             selected_index = [voice[0] for voice in VoiceAPI.VoiceList].index(selected_item)
             selected_number = VoiceAPI.VoiceList[selected_index][1]
+            Model.lang_out = VoiceAPI.VoiceList[selected_index][2]
             Model.voice_api.speaker = selected_number
-        voice_dropdown.bind("<<ComboboxSelected>>", on_lang_selection)
+        voice_dropdown.bind("<<ComboboxSelected>>", on_lang_out_selection)
         voice_dropdown.current(0)
         # テキストボックスの作成
         self.talk_text = tk.Text(talk_frame, height=2)
@@ -1140,14 +1150,6 @@ class AppWindow(tk.Tk):
         hist_frame_1.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
         hist_frame_2 = tk.Frame(hist_frame_1,borderwidth=1,relief=tk.SOLID)
         hist_frame_2.pack(side=tk.RIGHT, fill=tk.Y)
-        # ドロップダウンリストの作成
-        lang_dropdown = ttk.Combobox(hist_frame_2, values=AppModel.LANG_LIST, state="readonly", width=10)
-        lang_dropdown.pack(side=tk.TOP)
-        # ドロップダウンリストの選択が変更されたときのイベントハンドラを設定
-        def on_lang_selection(event):
-            Model.lang = lang_dropdown.get()
-        lang_dropdown.bind("<<ComboboxSelected>>", on_lang_selection)
-        lang_dropdown.current(0)
         # ドロップダウンリストの作成
         inter_dropdown = ttk.Combobox(hist_frame_2, values=AppModel.INTERRUPT_LIST, state="readonly", width=10)
         inter_dropdown.pack(side=tk.TOP)
