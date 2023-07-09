@@ -27,7 +27,7 @@ from tools.QuietTool import QuietTool
 from tools.webSearchTool import WebSearchTool
 
 import openai
-from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory
+from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
 from langchain.memory import ConversationTokenBufferMemory
 from langchain.prompts import MessagesPlaceholder
 from langchain.chat_models import ChatOpenAI
@@ -40,7 +40,8 @@ from langchain.prompts.chat import (
     HumanMessagePromptTemplate,
 )
 from langchain.schema import SystemMessage
-
+from langchain.schema import BaseMessage, BaseChatMessageHistory
+from libs.CustomChatMessageHistory import CustomChatMessageHistory
 # 再生関係
 import pygame
 
@@ -702,9 +703,9 @@ def LLM_process():
         openai_model='gpt-3.5-turbo'
         #openai_model='gpt-4'
 
-        llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
+        chat_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
         # ツールの準備
-        llm_math_chain = LLMMathChain.from_llm(llm=llm,verbose=False)
+        llm_math_chain = LLMMathChain.from_llm(llm=chat_llm,verbose=False)
         web_tool = WebSearchTool()
         tools=[]
         tools += [
@@ -729,16 +730,17 @@ def LLM_process():
         # メモリの準備
         agent_kwargs = {
             "system_message": system_message,
-            "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory")],
+            "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory_hanaya")],
         }
-        func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
-        #func_memory = ConversationBufferWindowMemory( k=5 )
-        #func_memory = ConversationBufferMemory(memory_key="memory", return_messages=True)
+        #func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
+        func_memory = ConversationSummaryBufferMemory(llm=chat_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True)
+        func_memory.chat_memory : BaseChatMessageHistory= CustomChatMessageHistory() #Field(default_factory=ChatMessageHistory)
+
 
         # エージェントの準備
         agent_chain = initialize_agent(
             tools, 
-            llm, 
+            chat_llm, 
             agent=AgentType.OPENAI_FUNCTIONS,
             verbose=False, 
             memory=func_memory,
