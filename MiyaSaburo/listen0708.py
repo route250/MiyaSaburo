@@ -142,7 +142,7 @@ class AppModel(threading.Thread):
             running = True
             threads = [
                 threading.Thread(target=recoard_audio),
-                threading.Thread(target=process_audio),
+                threading.Thread(target=process_audio2),
                 threading.Thread(target=plot_audio),
                 threading.Thread(target=LLM_process),
                 threading.Thread(target=wave_process),
@@ -206,11 +206,11 @@ FORMAT = pyaudio.paInt16  # オーディオフォーマット
 CHANNELS = 1  # チャンネル数
 RATE = 44100 #44100  # サンプルレート
 WIDTH = 2
-REC_SIZE = int(RATE*0.2)  # 録音時間（秒）
+DELTA_TIME=0.1
+REC_SIZE = int(RATE*DELTA_TIME)  # 録音時間（秒）
 REC_BUFFER_SEC = 10
 reduce_sz=2000
 x_size = int(RATE*15/reduce_sz)
-
 frame_queue = queue.Queue()
 plot_queue = queue.Queue()
 llm_queue = queue.Queue()
@@ -438,6 +438,7 @@ def plot_audio():
                     break
                 data, energy, cross = item
                 audio_src = np.frombuffer(data, dtype=np.int16)
+                del data, item
                 src_len=len(audio_src)
                 step=int(reduce_sz*2)
                 n = int(src_len/step)*2
@@ -512,6 +513,8 @@ class value_hist:
         self.ave = int(np.mean(self.hist))
         self.max = int(np.max(self.hist))
         self.min = int(np.min(self.hist))
+    def argmin(self,start):
+        return np.argmin(self.hist[start:])+start
 
 def process_audio():
     """"""
@@ -709,6 +712,125 @@ def process_audio():
         print("[process_audio]exit")
         plot_queue.put(None)
 
+def process_audio2():
+    """"""
+    global Model, App
+    global running
+    try:
+        try:
+            recognizer = sr.Recognizer()
+            buffer_len = RATE*WIDTH * REC_BUFFER_SEC
+            array_size = REC_SIZE*WIDTH
+            hist_len = int(buffer_len/array_size)+1
+            buffer = bytearray( buffer_len )
+            item = None
+            xpos_start = hist_len+1
+            xpos_end = xpos_start
+            in_talk = 0
+            energy_hist = value_hist(hist_len)
+            cross_hist = value_hist(hist_len)
+            lim_sec = 0
+            aaaaa=0
+            silent_count=0
+            recog_text=''
+            while running:
+                data = None
+                try:
+                    item = frame_queue.get(block=True,timeout=0.5)
+                    if item is None:
+                        break
+                    next_talk, data = item
+                except:
+                    continue
+                barray = bytearray(data)
+                # 音量計算
+                energy = sr.audioop.rms(barray, WIDTH)
+                cross = sr.audioop.cross(barray, WIDTH)
+                # Plotに送る
+                plot_queue.put( (data,energy,cross) )
+                # バッファに追加
+                data_len=len(barray)
+                buffer[:-data_len] = buffer[data_len:]
+                buffer[-data_len:] = barray
+                del barray
+                energy_hist.add(energy)
+                cross_hist.add(cross)
+                Model.energy_hist.add(energy)
+                Model.cross_hist.add(cross)
+                # ポインタをシフト
+                if xpos_start <= hist_len:
+                    xpos_start -= 1
+                # トリガー
+                rec_mode = 0
+                if xpos_start>hist_len:
+                    # 休止中
+                    if 350<energy or 350<cross:
+                        in_talk = next_talk
+                        xpos_start = hist_len-3
+                        Model.recog_detect.append("<st>")
+                        lim_sec = 1.8
+                        silent_count=0
+                    else:
+                        silent_count+=1
+                        if aaaaa>0 and silent_count>7:
+                            llm_queue.put((in_talk,recog_text+"\n"))
+                            recog_text = ''
+                            Model.recog_detect.clear()
+                            aaaaa=0
+                else:
+                    # バッファ中
+                    if energy<300 and cross<300:
+                        xpos_end = hist_len+1
+                        rec_mode=1
+                    else:
+                        buf_sec = (hist_len-xpos_start)*DELTA_TIME
+                        if buf_sec>lim_sec:
+                            low_idx = max(energy_hist.argmin(xpos_start),cross_hist.argmin(xpos_start))
+                            xpos_end = low_idx
+                            rec_mode=2
+
+                if rec_mode>0:                    
+                    try:
+                        Model.recog_state.set_running(True)
+                        st = buffer_len - (hist_len-xpos_start)*array_size
+                        ed = buffer_len - (hist_len-xpos_end+1)*array_size
+                        audio_data = sr.AudioData( buffer[st:ed], RATE, WIDTH)
+                        raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang_in, with_confidence=True)
+                    except sr.UnknownValueError as ex:
+                        raw_text = ''
+                        confidence = 0.0
+                    finally:
+                        Model.recog_state.set_running(False)
+                    if raw_text and len(raw_text)>1:
+                        print("[REC] {} ok {}-{} {},{}".format(rec_mode,xpos_start,xpos_end,in_talk,raw_text))
+                        Model.recog_detect.append(raw_text)
+                        recog_text += raw_text
+                        aaaaa=1
+                    else:
+                        print("[REC] {} fail {}-{}".format(rec_mode,xpos_start,xpos_end))
+                    # if rec_mode == 1:
+                    #     llm_queue.put((in_talk,"<ed>"))
+                    #     xpos_start = hist_len + 1
+                    #     xpos_end = xpos_start
+                    if raw_text and len(raw_text)>1:
+                        if rec_mode == 1:
+                            xpos_start = hist_len+1
+                        else:
+                            xpos_start = xpos_end-1
+                            Model.recog_detect.append("<|>")
+                    elif lim_sec < 3.0:
+                        lim_sec += 0.4
+                        Model.recog_detect.append("<->")
+                    else:
+                        Model.recog_detect.append("<X>")
+                        xpos_start = hist_len + 1
+                        xpos_end = xpos_start
+        finally:
+            pass
+    finally:
+        print("[process_audio]exit")
+        plot_queue.put(None)
+
 CANCEL_WARDS = ("きゃんせる","キャンセル","ちょっと待っ","停止","違う違う","stop","abort","cancel")
 def is_cancel(text):
     for w in CANCEL_WARDS:
@@ -850,7 +972,7 @@ def LLM_process():
                         App.llm_send_text.delete(1.0,'end')
 
                 if thread is None:
-                    if query.endswith("\n"):
+                    if query.endswith("\n") or query.endswith(AppModel.LONG_BLANK):
                         Model.talk_id = Model.next_id()
                         #start
                         last_queue = query
@@ -968,30 +1090,25 @@ def talk_process():
 
                     try:
                         mp3_buffer = BytesIO(audio)
-                        pygame.mixer.music.pause()
-                        pygame.mixer.music.unload()
                         pygame.mixer.music.load(mp3_buffer)
+                        del mp3_buffer
                         # 音声を再生
                         Model.talk_state.set_running(True)
                         App.talk_text.insert(tk.END,text)
                         if text != MARK_START and text != MARK_END:
                             App.chat_hist.insert(tk.END,text)
                             App.chat_hist.see('end')
+                            del audio
                         Model.play_talk_id = talk_id
                         print(f"[TALK] start talk_id:{Model.play_talk_id}")
                         pygame.mixer.music.play()
-                        c = 0
-                        while talk_id == Model.talk_id and pygame.mixer.music.get_busy():
-                            c = (c+1) %2
-                            if c == 0:
-                                Model.talk_state.set_running(True)
-                            else:
-                                Model.talk_state.set_running(False)
-                            time.sleep(0.5)
-                        del mp3_buffer
+                        while pygame.mixer.music.get_busy():
+                            if talk_id != Model.talk_id:
+                                pygame.mixer.music.pause()
+                                break
+                            time.sleep(0.2)
                     finally:
                         end_time = int(time.time()*1000)
-                        pygame.mixer.music.pause()
                         pygame.mixer.music.unload()
                         App.talk_text.delete(1.0,tk.END)
                         Model.talk_state.set_running(False)
@@ -1022,7 +1139,7 @@ class AppWindow(tk.Tk):
         super().__init__()
         self.title("試験用)音声認識チャットボット")
         # ウインドウのサイズ設定
-        self.geometry("800x600")
+        self.geometry("900x600")
 
         # ボタンを配置するフレームの作成
         record_frame = tk.Frame(self,relief=tk.SOLID,height=200)
