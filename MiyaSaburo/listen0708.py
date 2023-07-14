@@ -733,6 +733,12 @@ def process_audio2():
             aaaaa=0
             silent_count=0
             recog_text=''
+            energy_lo_ave = 350
+            energy_lo_th = 350
+            energy_hi_ave = 350
+            energy_hi_th = 350
+            cross_on = 350
+            cross_off = 350
             while running:
                 data = None
                 try:
@@ -755,6 +761,8 @@ def process_audio2():
                 del barray
                 energy_hist.add(energy)
                 cross_hist.add(cross)
+                cross_on = cross_hist.ave*3
+                cross_off = cross_on
                 Model.energy_hist.add(energy)
                 Model.cross_hist.add(cross)
                 # ポインタをシフト
@@ -762,9 +770,11 @@ def process_audio2():
                     xpos_start -= 1
                 # トリガー
                 rec_mode = 0
-                if xpos_start>hist_len:
+                if xpos_start>=hist_len:
                     # 休止中
-                    if 350<energy or 350<cross:
+                    if energy_lo_th<energy or cross_on<cross:
+                        print(f"[REC]UP {energy}/{energy_lo_th} {cross}/{cross_on}")
+                        energy_hi_ave = energy
                         in_talk = next_talk
                         xpos_start = hist_len-3
                         Model.recog_detect.append("<st>")
@@ -772,6 +782,8 @@ def process_audio2():
                         silent_count=0
                     else:
                         silent_count+=1
+                        energy_lo_ave += int( (energy-energy_lo_ave)*0.1 )
+                        energy_lo_th = int(energy_lo_ave * 5)
                         if aaaaa>0 and silent_count>7:
                             llm_queue.put((in_talk,recog_text+"\n"))
                             recog_text = ''
@@ -779,10 +791,13 @@ def process_audio2():
                             aaaaa=0
                 else:
                     # バッファ中
-                    if energy<300 and cross<300:
+                    if energy<energy_hi_th and cross<cross_off:
+                        print(f"[REC]DN {energy}/{energy_hi_th} {cross}/{cross_off}")
                         xpos_end = hist_len+1
                         rec_mode=1
                     else:
+                        energy_hi_ave += int( (energy-energy_hi_ave)*0.2 )
+                        energy_hi_th = int(energy_hi_ave * 0.3)
                         buf_sec = (hist_len-xpos_start)*DELTA_TIME
                         if buf_sec>lim_sec:
                             low_idx = max(energy_hist.argmin(xpos_start),cross_hist.argmin(xpos_start))
@@ -801,30 +816,27 @@ def process_audio2():
                         confidence = 0.0
                     finally:
                         Model.recog_state.set_running(False)
-                    if raw_text and len(raw_text)>1:
+                    if len(raw_text)>0:
                         print("[REC] {} ok {}-{} {},{}".format(rec_mode,xpos_start,xpos_end,in_talk,raw_text))
                         Model.recog_detect.append(raw_text)
                         recog_text += raw_text
                         aaaaa=1
-                    else:
-                        print("[REC] {} fail {}-{}".format(rec_mode,xpos_start,xpos_end))
-                    # if rec_mode == 1:
-                    #     llm_queue.put((in_talk,"<ed>"))
-                    #     xpos_start = hist_len + 1
-                    #     xpos_end = xpos_start
-                    if raw_text and len(raw_text)>1:
                         if rec_mode == 1:
                             xpos_start = hist_len+1
                         else:
                             xpos_start = xpos_end-1
                             Model.recog_detect.append("<|>")
-                    elif lim_sec < 3.0:
-                        lim_sec += 0.4
-                        Model.recog_detect.append("<->")
                     else:
-                        Model.recog_detect.append("<X>")
-                        xpos_start = hist_len + 1
-                        xpos_end = xpos_start
+                        print("[REC] {} fail {}-{}".format(rec_mode,xpos_start,xpos_end))
+                        if rec_mode == 1:
+                            xpos_start = hist_len+1
+                        elif lim_sec < 3.0:
+                            lim_sec += 0.4
+                            Model.recog_detect.append("<->")
+                        else:
+                            Model.recog_detect.append("<X>")
+                            xpos_start = hist_len + 1
+                            xpos_end = xpos_start
         finally:
             pass
     finally:
