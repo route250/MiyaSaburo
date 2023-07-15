@@ -17,6 +17,7 @@ import speech_recognition as sr
 
 import tkinter as tk
 from tkinter import ttk as ttk
+from tkinter import scrolledtext
 import time
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -125,6 +126,10 @@ class AppModel(threading.Thread):
         self.recog_limit_energy = 0
         self.recog_buffer : StrList = StrList()
         self.recog_detect : StrList = StrList()
+
+        self.cross_on_rate = 3
+        self.energy_up_rate =3
+        self.energy_dn_rate = 0.4
 
     def run(self):
         try:
@@ -513,6 +518,8 @@ class value_hist:
         self.ave = int(np.mean(self.hist))
         self.max = int(np.max(self.hist))
         self.min = int(np.min(self.hist))
+    def get(self,idx:int) -> int:
+        return self.hist[idx]
     def argmin(self,start):
         return np.argmin(self.hist[start:])+start
 
@@ -733,12 +740,13 @@ def process_audio2():
             aaaaa=0
             silent_count=0
             recog_text=''
-            energy_lo_ave = 350
-            energy_lo_th = 350
-            energy_hi_ave = 350
-            energy_hi_th = 350
+            energy_lo_ave = 30000
+            energy_lo_th = 30000
+            energy_hi_ave = 60000
+            energy_hi_th = 60000
             cross_on = 350
             cross_off = 350
+            fail_count = 0
             while running:
                 data = None
                 try:
@@ -760,8 +768,9 @@ def process_audio2():
                 buffer[-data_len:] = barray
                 del barray
                 energy_hist.add(energy)
+                # ゼロ交錯数は常に平均をとって判定に使う
                 cross_hist.add(cross)
-                cross_on = cross_hist.ave*3
+                cross_on = cross_hist.ave*Model.cross_on_rate
                 cross_off = cross_on
                 Model.energy_hist.add(energy)
                 Model.cross_hist.add(cross)
@@ -774,50 +783,58 @@ def process_audio2():
                     # 休止中
                     if energy_lo_th<energy or cross_on<cross:
                         print(f"[REC]UP {energy}/{energy_lo_th} {cross}/{cross_on}")
-                        energy_hi_ave = energy
+                        energy_hi_ave = energy*2
                         in_talk = next_talk
                         xpos_start = hist_len-3
                         Model.recog_detect.append("<st>")
                         lim_sec = 1.8
                         silent_count=0
+                        fail_count=0
                     else:
                         silent_count+=1
                         energy_lo_ave += int( (energy-energy_lo_ave)*0.1 )
-                        energy_lo_th = int(energy_lo_ave * 5)
+                        energy_lo_th = int(energy_lo_ave * Model.energy_up_rate)
                         if aaaaa>0 and silent_count>7:
                             llm_queue.put((in_talk,recog_text+"\n"))
                             recog_text = ''
                             Model.recog_detect.clear()
                             aaaaa=0
                 else:
+                    energy_hi_ave += int( (energy-energy_hi_ave)*0.2 )
+                    energy_hi_th = int(energy_hi_ave * Model.energy_dn_rate)
+                    buf_sec = (hist_len-xpos_start)*DELTA_TIME
                     # バッファ中
-                    if energy<energy_hi_th and cross<cross_off:
+                    if energy<energy_hi_th and ( cross<cross_off or buf_sec>lim_sec ):
                         print(f"[REC]DN {energy}/{energy_hi_th} {cross}/{cross_off}")
                         xpos_end = hist_len+1
                         rec_mode=1
-                    else:
-                        energy_hi_ave += int( (energy-energy_hi_ave)*0.2 )
-                        energy_hi_th = int(energy_hi_ave * 0.3)
-                        buf_sec = (hist_len-xpos_start)*DELTA_TIME
-                        if buf_sec>lim_sec:
-                            low_idx = max(energy_hist.argmin(xpos_start),cross_hist.argmin(xpos_start))
-                            xpos_end = low_idx
-                            rec_mode=2
+                    elif buf_sec>lim_sec:
+                        # 分割位置を探す
+                        low_idx = energy_hist.argmin( int((xpos_start+hist_len)*0.5) )
+                        print(f"[REC] split energy {low_idx}")
+                        while low_idx<hist_len and cross_hist.get(low_idx)>cross_on:
+                            low_idx+=1
+                        print(f"[REC] split cross {low_idx}")
+                        xpos_end = low_idx
+                        rec_mode=2
 
                 if rec_mode>0:                    
+                    rec_start_time = int(time.time()*1000)
                     try:
                         Model.recog_state.set_running(True)
                         st = buffer_len - (hist_len-xpos_start)*array_size
                         ed = buffer_len - (hist_len-xpos_end+1)*array_size
                         audio_data = sr.AudioData( buffer[st:ed], RATE, WIDTH)
                         raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang_in, with_confidence=True)
+                        del audio_data
                     except sr.UnknownValueError as ex:
                         raw_text = ''
                         confidence = 0.0
                     finally:
                         Model.recog_state.set_running(False)
+                    rec_time = int(time.time()*1000)-rec_start_time
                     if len(raw_text)>0:
-                        print("[REC] {} ok {}-{} {},{}".format(rec_mode,xpos_start,xpos_end,in_talk,raw_text))
+                        print("[REC] {} {}(ms) ok {}:{} {},{}".format(rec_mode,rec_time,xpos_start,xpos_end,in_talk,raw_text))
                         Model.recog_detect.append(raw_text)
                         recog_text += raw_text
                         aaaaa=1
@@ -827,13 +844,21 @@ def process_audio2():
                             xpos_start = xpos_end-1
                             Model.recog_detect.append("<|>")
                     else:
-                        print("[REC] {} fail {}-{}".format(rec_mode,xpos_start,xpos_end))
                         if rec_mode == 1:
+                            print("[REC] {} {}(ms) fail {}:{}".format(rec_mode,rec_time,xpos_start,xpos_end))
                             xpos_start = hist_len+1
                         elif lim_sec < 3.0:
-                            lim_sec += 0.4
-                            Model.recog_detect.append("<->")
+                            print("[REC] {} {}(ms) <-> {}:{}".format(rec_mode,rec_time,xpos_start,xpos_end))
+                            fail_count+=1
+                            if fail_count>=3:
+                                energy_lo_ave = energy_hi_ave
+                                energy_hi_ave = energy_hi_ave * 1000
+                            else:
+                                energy_hi_ave = energy_hi_ave * 1.2
+                                energy_lo_ave = energy_hi_ave * 1.2
+                            xpos_start = xpos_end-2
                         else:
+                            print("[REC] {} {}(ms) <X> {}:{}".format(rec_mode,rec_time,xpos_start,xpos_end))
                             Model.recog_detect.append("<X>")
                             xpos_start = hist_len + 1
                             xpos_end = xpos_start
@@ -1078,6 +1103,7 @@ def talk_process():
     global running
     global Model
     try:
+        pygame.mixer.pre_init(16000,-16,1,10240)
         pygame.mixer.quit()
         pygame.mixer.init()
         try:
@@ -1153,7 +1179,9 @@ class AppWindow(tk.Tk):
         # ウインドウのサイズ設定
         self.geometry("900x600")
 
-        # ボタンを配置するフレームの作成
+        #-----------------------------------------------------
+        # 録音フレームの作成
+        #-----------------------------------------------------
         record_frame = tk.Frame(self,relief=tk.SOLID,height=200)
         record_frame.pack(side=tk.BOTTOM, fill=tk.X)
         record_frame2 = tk.Frame(record_frame,relief=tk.SOLID)
@@ -1179,8 +1207,9 @@ class AppWindow(tk.Tk):
         self.audio_level_2.pack(side=tk.TOP)
         self.audio_level_3 = tk.Label(record_frame2, width=12, height=1)
         self.audio_level_3.pack(side=tk.TOP)
-
-        # plot area
+        #-----------------------------------------------------
+        # プロットフレーム
+        #-----------------------------------------------------
         fig = Figure(figsize=(1, 1), dpi=70)
         self.ax1 = fig.add_subplot(111)
         x_axis = np.arange(0, x_size, 1)
@@ -1207,7 +1236,9 @@ class AppWindow(tk.Tk):
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # ボタンを配置するフレームの作成
+        #-----------------------------------------------------
+        # 音声認識フレームの作成
+        #-----------------------------------------------------
         detect_frame = tk.Frame(self,relief=tk.SOLID)
         detect_frame.pack(side=tk.BOTTOM, fill=tk.X)
         detect_frame2 = self.create_indicator_frame(detect_frame,Model.audio_state,Model.recog_state)
@@ -1230,6 +1261,18 @@ class AppWindow(tk.Tk):
         self.recog_min_energy.pack(side=tk.TOP)
         self.recog_limit_energy = tk.Label(detect_frame3, width=12, height=1)
         self.recog_limit_energy.pack(side=tk.TOP)
+        # Entry
+        detect_frame4 = tk.Frame(detect_frame,relief=tk.SOLID,borderwidth=1)
+        detect_frame4.pack(side=tk.RIGHT, fill=tk.Y)
+        def on_entry_a(value:float):
+            Model.cross_on_rate = value
+        self.create_float_entry( detect_frame4, 'cross_on_rate', Model.cross_on_rate, on_entry_a )
+        def on_entry_b(value:float):
+            Model.energy_up_rate = value
+        self.create_float_entry( detect_frame4, 'energy_up_rate', Model.energy_up_rate, on_entry_b )
+        def on_entry_c(value:float):
+            Model.energy_dn_rate = value
+        self.create_float_entry( detect_frame4, 'energy_dn_rate', Model.energy_dn_rate, on_entry_c )
 
         # テキストボックスの作成
         self.recog_buffer = tk.Text(detect_frame, height=5,width=40)
@@ -1238,7 +1281,9 @@ class AppWindow(tk.Tk):
         self.recog_detect = tk.Text(detect_frame, height=5,width=40)
         self.recog_detect.pack(side=tk.LEFT)
 
-        # ボタンを配置するフレームの作成
+        #-----------------------------------------------------
+        # LLMフレームの作成
+        #-----------------------------------------------------
         llm_frame = tk.Frame(self,relief=tk.SOLID)
         llm_frame.pack(side=tk.BOTTOM, fill=tk.X)
         llm_frame2 = self.create_indicator_frame(llm_frame,Model.llm_state,None)
@@ -1250,7 +1295,9 @@ class AppWindow(tk.Tk):
         self.llm_send_text = tk.Text(llm_frame, height=5)
         self.llm_send_text.pack(fill=tk.X)
 
-        # ボタンを配置するフレームの作成
+        #-----------------------------------------------------
+        # 発声フレームの作成
+        #-----------------------------------------------------
         talk_frame = tk.Frame(self,relief=tk.SOLID)
         talk_frame.pack(side=tk.BOTTOM, fill=tk.X)
         talk_frame2 = self.create_indicator_frame(talk_frame,Model.wave_state,Model.talk_state)
@@ -1274,7 +1321,9 @@ class AppWindow(tk.Tk):
         self.talk_text = tk.Text(talk_frame, height=2)
         self.talk_text.pack(fill=tk.BOTH,expand=True)
 
-        # ボタンを配置するフレームの作成
+        #-----------------------------------------------------
+        # 会話履歴フレームの作成
+        #-----------------------------------------------------
         hist_frame_1 = tk.Frame(self,borderwidth=1,relief=tk.SOLID)
         hist_frame_1.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
         hist_frame_2 = tk.Frame(hist_frame_1,borderwidth=1,relief=tk.SOLID)
@@ -1289,7 +1338,7 @@ class AppWindow(tk.Tk):
         inter_dropdown.current(0)
 
         # テキストボックスの作成
-        self.chat_hist = tk.Text(hist_frame_1, height=10, width=80)
+        self.chat_hist = scrolledtext.ScrolledText(hist_frame_1, height=10, width=80)
         self.chat_hist.pack(fill=tk.BOTH,expand=True)
 
         # ウィンドウを閉じるときに呼ばれる関数を設定
@@ -1362,6 +1411,23 @@ class AppWindow(tk.Tk):
                 model_state_2.set_enable( not enable)
         enable_button.config( command=set_enable_indicator )
         return sub_frame
+    
+    def create_float_entry(self, frame, title:str, value:float, callback=None ):
+        def on_entry(event):
+            try:
+                value: float = float( event.widget.get() )
+                callback(value)
+            except:
+                pass
+        sub_frame = tk.Frame(frame,borderwidth=0)
+        sub_frame.pack(side=tk.TOP, fill=tk.X,padx=0,pady=0)
+        lbl = tk.Label(sub_frame,text=title)
+        lbl.pack(side=tk.LEFT)
+        ent : tk.Entry = tk.Entry(sub_frame, width=12)
+        ent.pack(side=tk.TOP,fill=tk.BOTH)
+        ent.insert(0,str(value))
+        if callback:
+            ent.bind("<Return>", on_entry)
 
 def main():
     os.makedirs("logs",exist_ok=True)
