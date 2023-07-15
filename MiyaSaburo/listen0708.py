@@ -380,7 +380,7 @@ def force_interrupt(target_thread: threading.Thread) -> bool:
             print('Failure in raising exception')
 
     except Exception as ex:
-        pass
+        print(ex)
 
     return False
 
@@ -712,7 +712,8 @@ def process_audio():
                     Model.energy_hist.clear()
                     pos = buffer_len
                     detect.d_end(buffer_len)
-
+        except Exception as ex:
+            print(ex)
         finally:
             pass
     finally:
@@ -726,6 +727,7 @@ def process_audio2():
     try:
         try:
             recognizer = sr.Recognizer()
+            recognizer.operation_timeout=1.0
             buffer_len = RATE*WIDTH * REC_BUFFER_SEC
             array_size = REC_SIZE*WIDTH
             hist_len = int(buffer_len/array_size)+1
@@ -747,6 +749,7 @@ def process_audio2():
             cross_on = 350
             cross_off = 350
             fail_count = 0
+            network_error = 0
             while running:
                 data = None
                 try:
@@ -759,7 +762,10 @@ def process_audio2():
                 barray = bytearray(data)
                 # 音量計算
                 energy = sr.audioop.rms(barray, WIDTH)
-                cross = sr.audioop.cross(barray, WIDTH)
+                if energy>10:
+                    cross = sr.audioop.cross(barray, WIDTH)
+                else:
+                    cross = 0
                 # Plotに送る
                 plot_queue.put( (data,energy,cross) )
                 # バッファに追加
@@ -777,6 +783,9 @@ def process_audio2():
                 # ポインタをシフト
                 if xpos_start <= hist_len:
                     xpos_start -= 1
+                if network_error>0:
+                    network_error-=1
+                    continue
                 # トリガー
                 rec_mode = 0
                 if xpos_start>=hist_len:
@@ -786,7 +795,7 @@ def process_audio2():
                         energy_hi_ave = energy*2
                         in_talk = next_talk
                         xpos_start = hist_len-3
-                        Model.recog_detect.append("<st>")
+                        #Model.recog_detect.append("<st>")
                         lim_sec = 1.8
                         silent_count=0
                         fail_count=0
@@ -827,6 +836,12 @@ def process_audio2():
                         audio_data = sr.AudioData( buffer[st:ed], RATE, WIDTH)
                         raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang_in, with_confidence=True)
                         del audio_data
+                    except sr.exceptions.RequestError as ex:
+                        print(f"[REC]{str(ex)}")
+                        network_error = int(5/DELTA_TIME)
+                        Model.recog_state.set_error('netError')
+                        xpos_start = hist_len+1
+                        continue
                     except sr.UnknownValueError as ex:
                         raw_text = ''
                         confidence = 0.0
@@ -859,9 +874,11 @@ def process_audio2():
                             xpos_start = xpos_end-2
                         else:
                             print("[REC] {} {}(ms) <X> {}:{}".format(rec_mode,rec_time,xpos_start,xpos_end))
-                            Model.recog_detect.append("<X>")
+                            #Model.recog_detect.append("<X>")
                             xpos_start = hist_len + 1
                             xpos_end = xpos_start
+        except Exception as ex:
+            print(ex)
         finally:
             pass
     finally:
@@ -1044,6 +1061,8 @@ def LLM_process():
                         App.llm_send_text.delete(1.0,'end')
                         App.llm_send_text.insert(1.0,query)
                 now = int(time.time()*1000)
+        except Exception as ex:
+            print(ex)
         finally:
             pass
     finally:
@@ -1093,7 +1112,8 @@ def wave_process():
                     init = 0
                 App.chat_hist.insert(tk.END,text)
                 App.chat_hist.see('end')
-
+    except Exception as ex:
+        print(ex)
     finally:
         print("[WAVE]exit")
         talk_queue.put(None)
@@ -1157,6 +1177,8 @@ def talk_process():
                     if not Model.talk_state.get_enable() and init != 0:
                         init = 0
                     time.sleep(0.2)
+        except Exception as ex:
+            print(ex)
         finally:
             print("[TALK]quit")
             pygame.mixer.quit()
@@ -1430,31 +1452,36 @@ class AppWindow(tk.Tk):
             ent.bind("<Return>", on_entry)
 
 def main():
-    os.makedirs("logs",exist_ok=True)
-    import logging
-    logger = logging.getLogger("openai")
-    logger.setLevel( logging.DEBUG )
-    fh = logging.FileHandler("logs/openai.log")
-    logger.addHandler(fh)
-    global Model,App
-    if not os.environ.get("OPENAI_API_KEY"):
-        for subdir in ('..', '../..'):
-            try:
-                with open(subdir + '/openai_api_key.txt','r') as cfg:
-                    k = cfg.readline()
-                    if k is not None and len(k)>0:
-                        os.environ["OPENAI_API_KEY"] = k
-                        break
-            except:
-                pass
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("ERROR: OPENAI_API_KEY is blank")
-        return
-    Model=AppModel()
-    App = AppWindow()
-    Model.start()
-    # アプリケーションの実行
-    App.mainloop()
+    try:
+        os.makedirs("logs",exist_ok=True)
+        import logging
+        logger = logging.getLogger("openai")
+        logger.setLevel( logging.DEBUG )
+        fh = logging.FileHandler("logs/openai.log")
+        logger.addHandler(fh)
+        global Model,App
+        if not os.environ.get("OPENAI_API_KEY"):
+            for subdir in ('..', '../..'):
+                try:
+                    with open(subdir + '/openai_api_key.txt','r') as cfg:
+                        k = cfg.readline()
+                        if k is not None and len(k)>0:
+                            os.environ["OPENAI_API_KEY"] = k
+                            break
+                except:
+                    pass
+        if not os.environ.get("OPENAI_API_KEY"):
+            print("ERROR: OPENAI_API_KEY is blank")
+            return
+        Model=AppModel()
+        App = AppWindow()
+        Model.start()
+        # アプリケーションの実行
+        App.mainloop()
+    except Exception as ex:
+        print(ex)
+    finally:
+        running = False
 
 def test():
     current_time = datetime.datetime.now()
