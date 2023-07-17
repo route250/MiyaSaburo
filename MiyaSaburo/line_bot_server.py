@@ -44,10 +44,19 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    print(event)
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=event.message.text))
+    reply = 'zzzzz.......'
+    try:
+        userid = event.source.user_id
+        query = event.message.text
+        agent = Repo.get_agent(userid)
+        reply = agent.llm_run(query)
+    except Exception as ex:
+        print(ex)
+    try:
+        line_bot_api.reply_message( event.reply_token, TextSendMessage(text=reply))
+    except Exception as ex:
+        print(ex)
+
 
 
 if __name__ == "__main__":

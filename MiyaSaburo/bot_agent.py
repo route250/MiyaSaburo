@@ -108,7 +108,7 @@ class BotAgent:
         # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
         # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
         self.personality = Personality()
-        self.personality.main_prompt = "You are a stray cat and an lady cat. powerd by OpenAI. You complain and make fun of people on a whim. Keep your remarks short. Talk casually and lethargic"
+        self.personality.main_prompt = "You are a stray cat. You complain and make fun of people on a whim. Talk casually and lethargic, remarks short."
         self.personality.post_process = default_post_process
         self.main_prompt_message = SystemMessage(
             content=self.personality.main_prompt
@@ -138,7 +138,10 @@ class BotAgent:
                 mp = f"Your name is {self.personality.name}." if self.personality.name else ""
                 mp += self.personality.main_prompt if self.personality.main_prompt else ""
                 self.memory.post_process = self.personality.post_process
-            mp += 'Use language of '+self.lang_out + " ( current time: " + formatted_time + " " + self.current_location +")"
+            mp += f"\ncurrent time:{formatted_time}" if formatted_time else ""
+            mp += f"\ncurrent location:{self.current_location}" if self.current_location else ""
+            mp += f'\nTalk in {self.lang_out}.' if self.lang_out else ""
+            mp += "\You speak a short line."
             # メインプロンプト設定
             self.main_prompt_message.content = mp
             # ポスト処理
