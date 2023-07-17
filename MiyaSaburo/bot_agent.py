@@ -66,6 +66,7 @@ REPLIST=[
         ["でも、", "でもニャ、"],
         ["ので、", "ニャ、"],
         ["ですから、", "だからニャ、"],
+        ["にゃーん、",""]
      ]
 
 def default_post_process( mesgs, origs):
@@ -169,10 +170,13 @@ class BotAgent:
 
         except KeyboardInterrupt as ex:
             print("[LLM] cancel" )
+            return "KeyboardInterrupt"
         except openai.error.APIError as ex:
-            print(ex)
+            return f"openai.error.APIError({ex})"
+        except openai.error.AuthenticationError as ex:
+            return "openai.error.AuthenticationError"
         except Exception as ex:
-            print(ex)
+            return f"InternalError({ex})"
         finally:
             if agent_chain:
                 del agent_chain
@@ -191,7 +195,7 @@ def main():
     agent2 : BotAgent = repo.get_agent(userid)
     print(f"agent {agent2.userid}")
 
-    agent2.llm_run('こんにちはい')
+    agent2.llm_run('明日の日経平均株価の予測モデルを作って予想して')
 
 
 if __name__ == "__main__":

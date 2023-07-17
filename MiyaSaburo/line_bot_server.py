@@ -25,11 +25,11 @@ msg_exec_queue : queue.Queue = queue.Queue()
 msg_running : bool = False
 
 #環境変数取得
-YOUR_CHANNEL_ACCESS_TOKEN = 'Z1oJC74ZloKFspen/GHxF8P/xx70DYD0Oig+0VrKWWJaQ4xKYYtnRx/K69KMtv/a1PprYuuC66RkYK0eR56Nm87vcSocyPVKYJhjHQNvrqPZcpTSg8AifLa/EpBQYG+vlQn2LqnV0rwvRe119z0z5AdB04t89/1O/w1cDnyilFU=' # os.environ["YOUR_CHANNEL_ACCESS_TOKEN"]
-YOUR_CHANNEL_SECRET = '0418b62d0703c5ffa6fb05698c92280d' # os.environ["YOUR_CHANNEL_SECRET"]
+LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 
-line_bot_api = LineBotApi(YOUR_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(YOUR_CHANNEL_SECRET)
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 Repo = BotRepository()
 
