@@ -1,6 +1,7 @@
 
 import os
 import time
+import re
 
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
@@ -124,6 +125,7 @@ class BotAgent:
         self.memory : CustomChatMessageHistory = CustomChatMessageHistory()
         self.agent_memory.chat_memory : BaseChatMessageHistory=self.memory #Field(default_factory=ChatMessageHistory)
         self.name = ''
+        self.anser_list = []
 
     def llm_run(self,query):
         agent_chain = None
@@ -162,6 +164,8 @@ class BotAgent:
             anser = self.agent_memory.chat_memory.messages[-1].content
             print(f"[LLM] GPT text:{anser}")
             return anser
+            # self.anser_list = re.split(r"(?<=[。\n])",anser)
+            # return self.anser_list.pop(0) if self.anser_list else ""
 
         except KeyboardInterrupt as ex:
             print("[LLM] cancel" )

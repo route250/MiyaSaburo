@@ -62,8 +62,8 @@ def handle_message(event):
 if __name__ == "__main__":
     # ssl
     import ssl
-    pem_file = 'fullchain.pem'
-    Key_file = 'privkey.pem'
+    pem_file = 'certs/fullchain.pem'
+    Key_file = 'certs/privkey.pem'
 
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
     ssl_context.load_cert_chain( pem_file, Key_file )
