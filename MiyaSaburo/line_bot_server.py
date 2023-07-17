@@ -49,7 +49,7 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event:MessageEvent):
-    msg_accept_queue(event)
+    msg_accept_queue.put(event)
 
 def timer_loop_thread():
     global msg_running
