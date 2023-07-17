@@ -67,6 +67,7 @@ def message_accept_thread():
         try:
             event = msg_accept_queue.get(block=True,timeout=5)
             if event:
+                msg_accept_queue.task_done()
                 msg_exec_queue.put( event )
         except Exception as ex:
             time.sleep(0.2)
@@ -79,7 +80,10 @@ def message_loop_thread():
         try:
             event:MessageEvent = msg_exec_queue.get(block=True,timeout=5)
             if event:
-                message_threadx(event)
+                try:
+                    message_threadx(event)
+                finally:
+                    msg_exec_queue.task_done()
         except Exception as ex:
             time.sleep(0.2)
             pass
