@@ -1,7 +1,10 @@
 #!/bin/bash
 
 
-export OPENAI_API_KEY='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'
+if [ -z "$OPENAI_API_KEY" ]; then
+    echo "ERROR: OEPNAI_API_KEY is not present."
+    exit 1
+fi
 
 deactive >/dev/null 2>&1
 
