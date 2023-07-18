@@ -17,6 +17,12 @@ from linebot.models import (
 )
 from bot_agent import BotRepository, BotAgent
 
+import logging
+logger = logging.getLogger("openai")
+logger.setLevel( logging.DEBUG )
+fh = logging.FileHandler("logs/linebot-openai.log")
+logger.addHandler(fh)
+
 app = Flask(__name__)
 
 # 処理キュー
