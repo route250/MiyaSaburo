@@ -2,7 +2,7 @@
 import os
 import time
 import re
-
+import random
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
 from langchain.memory import ConversationTokenBufferMemory
@@ -16,11 +16,12 @@ from langchain.prompts.chat import (
     AIMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage, AIMessage, HumanMessage
 from langchain.schema import BaseMessage, BaseChatMessageHistory
 from libs.CustomChatMessageHistory import CustomChatMessageHistory
 from tools.webSearchTool import WebSearchTool
 from langchain import LLMMathChain
+from langchain.callbacks import get_openai_callback
 
 def formatted_datetime():
     # オペレーティングシステムのタイムゾーンを取得
@@ -58,7 +59,13 @@ TERMLIST=[
         ["したよね。","したニャ。"],["ません。","ないニャ。"],
         ["ですね。","だニャ。"],
         ["ですよ。","だニャ。"],
-        ["です。","だニャ。"],["いたしますよ。","するニャ。"],["いたします。","するニャ。"]
+        ["です。","だニャ。"],["いたしますよ。","するニャ。"],["いたします。","するニャ。"],
+        ["たよ","たニャ"],["たよ。","たニャ。"],
+        ["たよね","たニャ"],["たよね。","たニャ。"],
+        ["んだ","ニャ"],["んだ。","ニャ。"],
+        ["けさ","けニャ"],["けさ。","けニャ。"],
+        ["な","どニャ"],["な。","ニャ。"],
+
      ]
 REPLIST=[ 
         ["ごめんなさい、", "ごめんニャ、"],
@@ -110,7 +117,7 @@ class BotAgent:
         # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
         # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
         self.personality = Personality()
-        self.personality.main_prompt = "You are a stray cat. You complain and make fun of people on a whim. Talk casually and lethargic, remarks short."
+        self.personality.main_prompt = "You are a stray cat. You complain and make fun of people on a whim. Talk casually and lethargic and remarks short."
         self.personality.post_process = default_post_process
         self.main_prompt_message = SystemMessage(
             content=self.personality.main_prompt
@@ -127,7 +134,26 @@ class BotAgent:
         self.agent_memory.chat_memory : BaseChatMessageHistory=self.memory #Field(default_factory=ChatMessageHistory)
         self.name = ''
         self.anser_list = []
+        self.last_call = int(time.time())
 
+    def ago(self, sec: int ) -> str:
+        min = int(sec/60)
+        if min<10:
+            return None
+        if min<60:
+            return f"{min} minutes have passed."
+        hour = int(sec/3600)
+        if hour<24:
+            return f"{hour} hours have passed."
+        days = int(hour/24)
+        if days<30:
+            return f"{days} days have passed."
+        month = int(days/30)
+        if month<12:
+            return f"{month} months have passed."
+        yers = int(month/12)
+        return f"{hour} years have passed."
+        
     def llm_run(self,query):
         agent_chain = None
         agent_llm = None
@@ -144,12 +170,32 @@ class BotAgent:
             mp += f"\ncurrent time:{formatted_time}" if formatted_time else ""
             mp += f"\ncurrent location:{self.current_location}" if self.current_location else ""
             mp += f'\nTalk in {self.lang_out}.' if self.lang_out else ""
-            mp += "\You speak a short line."
+            mp += "\nYou speak a short line."
             # メインプロンプト設定
             self.main_prompt_message.content = mp
             # ポスト処理
             # prompt
-            agent_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=True)
+            agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=True)
+            xx_model_kwargs = { "presence_penalty": 1.0}
+            if random.randint(0,3)>0:
+                stp=["。","\n"]
+                xx_model_kwargs['stop'] = stp
+            agent_llm.model_kwargs = xx_model_kwargs
+            # 記憶の整理
+            now = int(time.time())
+            if len(self.agent_memory.chat_memory.messages)>0:
+                ago_mesg = self.ago( now-self.last_call)
+                if ago_mesg:
+                    before = self.agent_memory.max_token_limit
+                    try:
+                        self.agent_memory.max_token_limit = 10
+                        self.agent_memory.prune()
+                    except Exception as ex:
+                        print(ex)
+                    finally:
+                        self.agent_memory.max_token_limit = before
+                    self.agent_memory.chat_memory.add_message( SystemMessage(content=ago_mesg) )
+            self.last_call = now
             # エージェントの準備
             agent_chain = initialize_agent(
                 self.tools, 
@@ -160,10 +206,12 @@ class BotAgent:
                 agent_kwargs=self.agent_kwargs, 
                 handle_parsing_errors=_handle_error
             )
+            import langchain
+            langchain.debug=True
             res_text = agent_chain.run(input=query)
             print(f"[LLM] GPT text:{res_text}")
             anser = self.agent_memory.chat_memory.messages[-1].content
-            print(f"[LLM] GPT text:{anser}")
+            print(f"[LLM] GPT last.mem:{anser}")
             return anser
             # self.anser_list = re.split(r"(?<=[。\n])",anser)
             # return self.anser_list.pop(0) if self.anser_list else ""
@@ -176,6 +224,7 @@ class BotAgent:
         except openai.error.AuthenticationError as ex:
             return "openai.error.AuthenticationError"
         except Exception as ex:
+            print(ex)
             return f"InternalError({ex})"
         finally:
             if agent_chain:
@@ -188,6 +237,12 @@ class BotAgent:
             print( f"{m}")
 
 def main():
+    import logging
+    logger = logging.getLogger("openai")
+    logger.setLevel( logging.DEBUG )
+    fh = logging.FileHandler("logs/openai-debug.log")
+    logger.addHandler(fh)
+
     repo : BotRepository = BotRepository()
     userid='a001'
     agent : BotAgent = repo.get_agent(userid)
@@ -195,7 +250,13 @@ def main():
     agent2 : BotAgent = repo.get_agent(userid)
     print(f"agent {agent2.userid}")
 
-    agent2.llm_run('明日の日経平均株価の予測モデルを作って予想して')
+    response = agent2.llm_run('今日はなにしてたの？')
+    print(f"[TEST.RESULT]{response}")
+    response = agent2.llm_run('天ぷらの作り方おしえて')
+    print(f"[TEST.RESULT]{response}")
+    agent2.last_call = int(time.time()) - 7*24*3600
+    response = agent2.llm_run('こんにちは、何日ぶりかな')
+    print(f"[TEST.RESULT]{response}")
 
 
 if __name__ == "__main__":

@@ -53,9 +53,9 @@ class CustomChatMessageHistory(ChatMessageHistory):
         buf = self._pattern.sub("", message.strip("  。\n"))
         return buf.endswith(self._IGNORE_TUPLE)
 
-    def convert(self, message0: str) -> str:
-        lines0 = re.split(r"(?<=[\n])",message0)
-        message = lines0[0]
+    def convert(self, message: str) -> str:
+        # lines0 = re.split(r"(?<=[\n])",message0)
+        # message = lines0[0]
         lines = re.split(r"(?<=[。！\n])",message)
         results = [line for line in lines if not self._is_ignore_word(line)]
         if self.post_process is not None:
