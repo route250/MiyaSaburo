@@ -47,6 +47,8 @@ class BotRepository:
 class Personality:
     def __init__(self):
         self.name = ''
+        self.profile_prompt = ''
+        self.event_prompt = ''
         self.main_prompt = ''
         self.post_process : function = None
 TERMLIST=[ 
@@ -117,7 +119,9 @@ class BotAgent:
         # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
         # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
         self.personality = Personality()
+        self.personality.profile_prompt = "Stray cat profile\n name: \n Coat: color and pattern \n Personality: 10 characters or less"
         self.personality.main_prompt = "You are a stray cat. You complain and make fun of people on a whim. Talk casually and lethargic and remarks short."
+        self.personality.event_prompt = "Minor events of the day (100 characters or less):\n\nWhat stray cats want to ask users (up to 100 characters):\n\n"
         self.personality.post_process = default_post_process
         self.main_prompt_message = SystemMessage(
             content=self.personality.main_prompt
@@ -135,6 +139,7 @@ class BotAgent:
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
+        self.profile_text : str = None
 
     def ago(self, sec: int ) -> str:
         min = int(sec/60)
@@ -159,12 +164,22 @@ class BotAgent:
         agent_llm = None
         try:
             print(f"[LLM] you text:{query}")
+            agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
+            # プロファイル生成
+            if not self.profile_text:
+                if self.personality.profile_prompt:
+                    self.profile_text = agent_llm.predict(self.personality.profile_prompt)
+                if self.profile_text:
+                    self.profile_text += "\n"
+                else:
+                    self.profile_text = ' '
             # 現在の時刻を取得
             formatted_time = formatted_datetime()
             # メインプロンプト構築
             mp = ""
             if self.personality:
                 mp = f"Your name is {self.personality.name}." if self.personality.name else ""
+                mp += self.profile_text if self.profile_text else ""
                 mp += self.personality.main_prompt if self.personality.main_prompt else ""
                 self.memory.post_process = self.personality.post_process
             mp += f"\ncurrent time:{formatted_time}" if formatted_time else ""
@@ -175,17 +190,14 @@ class BotAgent:
             self.main_prompt_message.content = mp
             # ポスト処理
             # prompt
-            agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=True)
-            xx_model_kwargs = { "presence_penalty": 1.0}
-            if random.randint(0,3)>0:
-                stp=["。","\n"]
-                xx_model_kwargs['stop'] = stp
-            agent_llm.model_kwargs = xx_model_kwargs
+                
             # 記憶の整理
             now = int(time.time())
-            if len(self.agent_memory.chat_memory.messages)>0:
-                ago_mesg = self.ago( now-self.last_call)
-                if ago_mesg:
+            ago_mesg = self.ago( now-self.last_call)
+            if ago_mesg:
+                # 記憶を要約
+                event_text = []
+                if len(self.agent_memory.chat_memory.messages)>0:
                     before = self.agent_memory.max_token_limit
                     try:
                         self.agent_memory.max_token_limit = 10
@@ -194,8 +206,22 @@ class BotAgent:
                         print(ex)
                     finally:
                         self.agent_memory.max_token_limit = before
-                    self.agent_memory.chat_memory.add_message( SystemMessage(content=ago_mesg) )
+                    event_text.append(ago_mesg)
+                # 出来事を追加
+                # self.event_promptで出来事を生成
+                if self.personality.event_prompt:
+                    text = agent_llm.predict( self.profile_text + "\n" + self.personality.event_prompt)
+                    if text:
+                        event_text.append(text)
+                if len(event_text)>0:
+                    self.agent_memory.chat_memory.add_message( SystemMessage(content="\n".join(event_text)) )
             self.last_call = now
+            # 回答の制限
+            xx_model_kwargs = { "presence_penalty": 1.0}
+            if random.randint(0,3)>0:
+                stp=["。","\n"]
+                xx_model_kwargs['stop'] = stp
+            agent_llm.model_kwargs = xx_model_kwargs
             # エージェントの準備
             agent_chain = initialize_agent(
                 self.tools, 
@@ -256,6 +282,8 @@ def main():
     print(f"[TEST.RESULT]{response}")
     agent2.last_call = int(time.time()) - 7*24*3600
     response = agent2.llm_run('こんにちは、何日ぶりかな')
+    print(f"[TEST.RESULT]{response}")
+    response = agent2.llm_run('何か出来事がありましたか？')
     print(f"[TEST.RESULT]{response}")
 
 
