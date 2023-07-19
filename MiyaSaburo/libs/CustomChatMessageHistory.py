@@ -44,6 +44,9 @@ class CustomChatMessageHistory(ChatMessageHistory):
         "サイトで確認してください",
         "願っています",
         "計画はありますか",
+
+        "話したいことある",
+        "助けが必要か"
         )
     _IGNORE_TUPLE = tuple( set(_IGNORE_WORDS) )
     _pattern = re.compile(r"[、？！]")

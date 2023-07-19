@@ -47,26 +47,26 @@ class BotRepository:
 class Personality:
     def __init__(self):
         self.name = ''
-        self.profile_prompt = ''
-        self.event_prompt = ''
         self.main_prompt = ''
+        self.event_prompt = ''
         self.post_process : function = None
 TERMLIST=[ 
-        ["ありません。", "ないニャ。"],["ください。","にゃ。"],
-        ["できません。", "できないニャ。"],
-        ["できます。", "できるニャ。"],
-        ["ありません。", "ないニャ。"],["ありますか。","あるニャ？"],
-        ["ですか？", "ニャ？"],
-        ["ましたね。","ましたニャ。"],
-        ["したよね。","したニャ。"],["ません。","ないニャ。"],
-        ["ですね。","だニャ。"],
-        ["ですよ。","だニャ。"],
-        ["です。","だニャ。"],["いたしますよ。","するニャ。"],["いたします。","するニャ。"],
-        ["たよ","たニャ"],["たよ。","たニャ。"],
-        ["たよね","たニャ"],["たよね。","たニャ。"],
-        ["んだ","ニャ"],["んだ。","ニャ。"],
-        ["けさ","けニャ"],["けさ。","けニャ。"],
-        ["な","どニャ"],["な。","ニャ。"],
+        ["ありません", "ないニャ"],["ください","にゃ"],
+        ["できません", "できないニャ"],
+        ["できます", "できるニャ"],
+        ["ありません", "ないニャ"],["ありますか","あるニャ"],
+        ["ですか", "ニャ"],
+        ["ました","したニャ"],["ましたね","したニャ"],
+        ["したよね","したニャ"],["ません","ないニャ"],
+        ["ですね","だニャ"],
+        ["ですよ","だニャ"],
+        ["です","だニャ"],["いたしますよ","するニャ"],["いたします","するニャ"],
+        ["たよ","たニャ"],["たよ","たニャ"],
+        ["たよね","たニャ"],["たよね","たニャ"],
+        ["んだ","ニャ"],
+        ["けさ","けニャ"],
+        ["な","ニャ"],
+        ["ましょう","ますニャ"]
 
      ]
 REPLIST=[ 
@@ -82,8 +82,22 @@ def default_post_process( mesgs, origs):
     result = []
     for i,m in enumerate(mesgs):
         for j,e, in enumerate(TERMLIST):
-            if m.endswith(e[0]):
-                m = m[:-len(e[0])] + e[1]
+            e0=e[0]
+            e1=e[1]
+            if m.endswith(e0):
+                m = m[:-len(e0)] + e1
+            e0a=e0+"。"
+            e1a=e1+"。"
+            if m.endswith(e0a):
+                m = m[:-len(e0a)] + e1a
+            e0a=e0+"？"
+            e1a=e1+"？"
+            if m.endswith(e0a):
+                m = m[:-len(e0a)] + e1a
+            e0a=e0+"！"
+            e1a=e1+"！"
+            if m.endswith(e0a):
+                m = m[:-len(e0a)] + e1a
         for e in REPLIST:
             m = m.replace(e[0],e[1])
         result.append(m)
@@ -119,9 +133,9 @@ class BotAgent:
         # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
         # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
         self.personality = Personality()
-        self.personality.profile_prompt = "Stray cat profile\n name: \n Coat: color and pattern \n Personality: 10 characters or less"
-        self.personality.main_prompt = "You are a stray cat. You complain and make fun of people on a whim. Talk casually and lethargic and remarks short."
-        self.personality.event_prompt = "Minor events of the day (100 characters or less):\n\nWhat stray cats want to ask users (up to 100 characters):\n\n"
+        self.personality.main_prompt = "You are not AI, You are a stray cat. You complain and make fun of people on a whim. Talk in casually and lethargic and remarks short."
+        self.personality.main_prompt = "You are not an AI, you are a stray cat. Stray cats don't help humans. Cats make fun of humans for their strange behavior. Generate and talk to humans about the lives and events of stray cats. Please speak casually and roughly. Please speak within 30 words."
+        self.personality.event_prompt = "Minor events of the day (20 words or less):\n\nWhat stray cats want to ask users (20 words or less):\n\n"
         self.personality.post_process = default_post_process
         self.main_prompt_message = SystemMessage(
             content=self.personality.main_prompt
@@ -139,7 +153,6 @@ class BotAgent:
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
-        self.profile_text : str = None
 
     def ago(self, sec: int ) -> str:
         min = int(sec/60)
@@ -165,21 +178,12 @@ class BotAgent:
         try:
             print(f"[LLM] you text:{query}")
             agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
-            # プロファイル生成
-            if not self.profile_text:
-                if self.personality.profile_prompt:
-                    self.profile_text = agent_llm.predict(self.personality.profile_prompt)
-                if self.profile_text:
-                    self.profile_text += "\n"
-                else:
-                    self.profile_text = ' '
             # 現在の時刻を取得
             formatted_time = formatted_datetime()
             # メインプロンプト構築
             mp = ""
             if self.personality:
                 mp = f"Your name is {self.personality.name}." if self.personality.name else ""
-                mp += self.profile_text if self.profile_text else ""
                 mp += self.personality.main_prompt if self.personality.main_prompt else ""
                 self.memory.post_process = self.personality.post_process
             mp += f"\ncurrent time:{formatted_time}" if formatted_time else ""
@@ -210,7 +214,7 @@ class BotAgent:
                 # 出来事を追加
                 # self.event_promptで出来事を生成
                 if self.personality.event_prompt:
-                    text = agent_llm.predict( self.profile_text + "\n" + self.personality.event_prompt)
+                    text = agent_llm.predict( self.personality.main_prompt + "\n" + self.personality.event_prompt, stop=["\n"])
                     if text:
                         event_text.append(text)
                 if len(event_text)>0:
