@@ -814,14 +814,18 @@ def process_audio2():
                     buf_sec = (hist_len-xpos_start)*DELTA_TIME
                     # バッファ中
                     if energy<energy_hi_th and ( cross<cross_off or buf_sec>lim_sec ):
+                        xcount += 1
+                    else:
+                        xcount = 0
+                    if xcount>3:
                         print(f"[REC]DN {energy}/{energy_hi_th} {cross}/{cross_off}")
                         xpos_end = hist_len+1
                         rec_mode=1
                     elif buf_sec>lim_sec:
                         # 分割位置を探す
-                        low_idx = energy_hist.argmin( int((xpos_start+hist_len)*0.5) )
+                        low_idx = energy_hist.argmin( int((xpos_start+hist_len)*0.5) )-1
                         print(f"[REC] split energy {low_idx}")
-                        while low_idx<hist_len and cross_hist.get(low_idx)>cross_on:
+                        while low_idx<hist_len and cross_hist.get(low_idx)>cross_off:
                             low_idx+=1
                         print(f"[REC] split cross {low_idx}")
                         xpos_end = low_idx
@@ -836,7 +840,7 @@ def process_audio2():
                         audio_data = sr.AudioData( buffer[st:ed], RATE, WIDTH)
                         raw_text, confidence = recognizer.recognize_google(audio_data, language=Model.lang_in, with_confidence=True)
                         del audio_data
-                    except sr.exceptions.RequestError as ex:
+                    except (sr.exceptions.RequestError,TimeoutError) as ex:
                         print(f"[REC]{str(ex)}")
                         network_error = int(5/DELTA_TIME)
                         Model.recog_state.set_error('netError')
@@ -878,7 +882,7 @@ def process_audio2():
                             xpos_start = hist_len + 1
                             xpos_end = xpos_start
         except Exception as ex:
-            print(ex)
+            print("[process_audio]"+ex.__class__.__name__+" "+ex)
         finally:
             pass
     finally:
@@ -969,7 +973,7 @@ def LLM_process():
                 Model.llm_state.set_running(True)
                 # 現在の時刻を取得
                 formatted_time = formatted_datetime()
-                system_message.content = system_prompt + ' Use language of '+Model.lang_out + " ( current time: " + formatted_time + " " + current_location +")"
+                system_message.content = system_prompt + ' Talk casually in '+Model.lang_out + " ( current time: " + formatted_time + " " + current_location +")"
                 callback_hdr = BotCustomCallbackHandler(Model)
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
