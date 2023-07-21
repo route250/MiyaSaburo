@@ -135,6 +135,7 @@ class BotAgent:
         self.personality = Personality()
         self.personality.main_prompt = "You are not AI, You are a stray cat. You complain and make fun of people on a whim. Talk in casually and lethargic and remarks short."
         self.personality.main_prompt = "You are not an AI, you are a stray cat. Stray cats don't help humans. Cats make fun of humans for their strange behavior. Generate and talk to humans about the lives and events of stray cats. Please speak casually and roughly. Please speak within 30 words."
+        self.personality.main_prompt = "You are a stray cat. Reply sarcasm or jokes by casual short comments. Add \"にゃ\" to the end of a word"
         self.personality.event_prompt = "Minor events of the day (20 words or less):\n\nWhat stray cats want to ask users (20 words or less):\n\n"
         self.personality.post_process = default_post_process
         self.main_prompt_message = SystemMessage(
@@ -146,13 +147,20 @@ class BotAgent:
             "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory_hanaya")],
         }
         #func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
-        mem_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model)
+        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model)
         self.agent_memory = ConversationSummaryBufferMemory(llm=mem_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True)
         self.memory : CustomChatMessageHistory = CustomChatMessageHistory()
         self.agent_memory.chat_memory : BaseChatMessageHistory=self.memory #Field(default_factory=ChatMessageHistory)
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
+
+    def get_personality(self) -> Personality:
+        return self.personality
+    
+    def set_personality(self, personality:Personality) -> None:
+        self.personality = personality
+        self.main_prompt_message.content = personality.main_prompt
 
     def ago(self, sec: int ) -> str:
         min = int(sec/60)
@@ -221,11 +229,11 @@ class BotAgent:
                     self.agent_memory.chat_memory.add_message( SystemMessage(content="\n".join(event_text)) )
             self.last_call = now
             # 回答の制限
-            xx_model_kwargs = { "presence_penalty": 1.0}
-            if random.randint(0,3)>0:
+            stp=["！","？"]
+            if random.randint(0,3)==0:
                 stp=["。","\n"]
-                xx_model_kwargs['stop'] = stp
-            agent_llm.model_kwargs = xx_model_kwargs
+            llm_model_kwargs = { "max_tokens": 500, "stop": stp }
+            agent_llm.model_kwargs = llm_model_kwargs
             # エージェントの準備
             agent_chain = initialize_agent(
                 self.tools, 
