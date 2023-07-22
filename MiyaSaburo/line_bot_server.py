@@ -169,7 +169,7 @@ def main():
     pem_file = 'certs/fullchain.pem'
     Key_file = 'certs/privkey.pem'
 
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.load_cert_chain( pem_file, Key_file )
 #    app.run()
     #port = int(os.getenv("PORT", 5000))
