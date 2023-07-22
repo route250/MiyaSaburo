@@ -40,6 +40,9 @@ app = Flask(__name__)
 app.logger.removeHandler(default_handler)
 app.logger.addHandler(fh)
 
+botlogger = logging.getLogger("line_bot")
+botlogger.setLevel('debug')
+
 #-----------------------------------------
 # 処理キュー
 msg_accept_queue : queue.Queue = queue.Queue()
@@ -59,6 +62,7 @@ Repo = BotRepository(agent_repo_path)
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    botlogger.debug("callback")
     # get X-Line-Signature header value
     signature = request.headers['X-Line-Signature']
     # get request body as text
@@ -87,6 +91,7 @@ def line_callback(channel):
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event:MessageEvent):
+    botlogger.debug("handle_message")
     msg_accept_queue.put(event)
 
 def timer_loop_thread():
@@ -106,6 +111,7 @@ def message_accept_thread():
         try:
             event = msg_accept_queue.get(block=True,timeout=5)
             if event:
+                botlogger.debug("accept")
                 msg_accept_queue.task_done()
                 msg_exec_queue.put( event )
         except Exception as ex:
@@ -120,6 +126,7 @@ def message_loop_thread():
             event:MessageEvent = msg_exec_queue.get(block=True,timeout=5)
             if event:
                 try:
+                    botlogger.debug("submit")
                     message_threadx(event)
                 finally:
                     msg_exec_queue.task_done()
@@ -132,14 +139,17 @@ def message_loop_thread():
 def message_threadx(event:MessageEvent):
     reply = 'zzzzz.......'
     try:
+        botlogger.debug("xxx start")
         userid = event.source.user_id
         query = event.message.text
         agent = Repo.get_agent(userid)
         reply = agent.llm_run(query)
     except Exception as ex:
         reply = "(orz)"
+        botlogger.error(ex)
         print(ex)
     try:
+        botlogger.debug("response")
         with ApiClient(line_config) as api_client:
             line_bot_api = MessagingApi(api_client)
             line_bot_api.reply_message_with_http_info(
@@ -149,7 +159,9 @@ def message_threadx(event:MessageEvent):
                 )
             )
     except Exception as ex:
+        botlogger.error(ex)
         print(ex)
+    botlogger.debug("xxx end")
 
 def main():
     global msg_running
