@@ -5,26 +5,42 @@ import queue
 import threading
 
 from flask import Flask, request, abort
-
-from linebot import (
-    LineBotApi, WebhookHandler
+from flask.logging import default_handler
+from linebot.v3 import (
+    WebhookHandler
 )
-from linebot.exceptions import (
+from linebot.v3.exceptions import (
     InvalidSignatureError
 )
-from linebot.models import (
-    MessageEvent, TextMessage, TextSendMessage,
+from linebot.v3.messaging import (
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage
+)
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent
 )
 from bot_agent import BotRepository, BotAgent
 
+#-----------------------------------------
+# ログ設定
+#-----------------------------------------
 import logging
+root_logger = logging.getLogger()
+fh = logging.FileHandler("logs/linebot-openai.log")
+root_logger.addHandler(fh)
+
 logger = logging.getLogger("openai")
 logger.setLevel( logging.DEBUG )
-fh = logging.FileHandler("logs/linebot-openai.log")
-logger.addHandler(fh)
 
 app = Flask(__name__)
+app.logger.removeHandler(default_handler)
+app.logger.addHandler(fh)
 
+#-----------------------------------------
 # 処理キュー
 msg_accept_queue : queue.Queue = queue.Queue()
 msg_exec_queue : queue.Queue = queue.Queue()
@@ -34,13 +50,29 @@ msg_running : bool = False
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-Repo = BotRepository()
+agent_repo_path = "agents"
+os.makedirs(agent_repo_path,exist_ok=True)
+Repo = BotRepository(agent_repo_path)
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    # get X-Line-Signature header value
+    signature = request.headers['X-Line-Signature']
+    # get request body as text
+    body : bytes = request.get_data(as_text=True)
+    app.logger.info("Request body: " + body)
+    # handle webhook body
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+@app.route("/xbot/v1/line_bot/<channel>", methods=['POST'])
+def line_callback(channel):
     # get X-Line-Signature header value
     signature = request.headers['X-Line-Signature']
     # get request body as text
@@ -62,6 +94,7 @@ def timer_loop_thread():
     while msg_running:
         try:
             time.sleep(0.2)
+            Repo.call_timer()
         except Exception as ex:
             time.sleep(0.2)
         finally:
@@ -104,9 +137,17 @@ def message_threadx(event:MessageEvent):
         agent = Repo.get_agent(userid)
         reply = agent.llm_run(query)
     except Exception as ex:
+        reply = "(orz)"
         print(ex)
     try:
-        line_bot_api.reply_message( event.reply_token, TextSendMessage(text=reply))
+        with ApiClient(line_config) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    replyToken=event.reply_token,
+                    messages=[TextMessage(text=reply)]
+                )
+            )
     except Exception as ex:
         print(ex)
 

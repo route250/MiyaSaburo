@@ -1,8 +1,10 @@
 
 import os
 import time
+import threading
 import re
 import random
+import json
 import openai
 from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
 from langchain.memory import ConversationTokenBufferMemory
@@ -22,6 +24,8 @@ from libs.CustomChatMessageHistory import CustomChatMessageHistory
 from tools.webSearchTool import WebSearchTool
 from langchain import LLMMathChain
 from langchain.callbacks import get_openai_callback
+from langchain.schema import messages_from_dict, messages_to_dict
+
 
 def formatted_datetime():
     # オペレーティングシステムのタイムゾーンを取得
@@ -35,21 +39,64 @@ def _handle_error(error) -> str:
     return str(error)[:50]
 
 class BotRepository:
-    def __init__(self):
+    def __init__(self, path):
+        self._lock = threading.Lock()
+        self._last_timer = int(time.time()*1000)
         self._map :dict = dict()
+        self.repo_path = path
+        self.unload_min = 10
+
+    def size(self) ->int:
+        return len(self._map)
 
     def get_agent(self, userid ):
-        agent:BotAgent = self._map.get(userid)
-        if agent is None:
-            agent = BotAgent(userid)
-            self._map[userid] = agent
-        return agent
+        try:
+            self._lock.acquire()
+            agent:BotAgent = self._map.get(userid)
+            if agent is None:
+                agent = BotAgent(userid)
+                self._map[userid] = agent
+                agent.load(self.repo_path)
+            return agent
+        finally:
+            self._lock.release()
+
+    def call_timer(self):
+        now = int(time.time()*1000)
+        if (now-self._last_timer)<10000:
+            return
+        self._last_timer = now
+        try:
+            self._lock.acquire()
+            min = self.unload_min * 60 * 1000
+            for userid in list(self._map.keys()):
+                agent:BotAgent = self._map.get(userid)
+                if (now-agent.last_call)>min:
+                    agent.unload(self.repo_path)
+                    del self._map[userid]
+                    break
+        finally:
+            self._lock.release()
+
 class Personality:
     def __init__(self):
         self.name = ''
         self.main_prompt = ''
         self.event_prompt = ''
         self.post_process : function = None
+
+    def from_dict(self,json_data:dict ):
+        self.name = json_data.get("name",None)
+        self.main_prompt = json_data.get("main_prompt",None)
+        self.event_prompt = json_data.get("event_prompt",None)
+
+    def to_dict(self) -> dict:
+        dic = {
+            "name":self.name,
+            "main_prompt": self.main_prompt,
+            "event_prompt": self.event_prompt,
+            #"post_process": self.post_process
+        }
 TERMLIST=[ 
         ["ありません", "ないニャ"],["ください","にゃ"],
         ["できません", "できないニャ"],
@@ -154,6 +201,70 @@ class BotAgent:
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
+
+    def _file_path(self,path):
+        return f"{path}/model_{self.userid}.json"
+
+    def load(self,path):
+        if not self.userid or not path:
+            return
+        json_file = self._file_path(path)
+        if not os.path.exists(json_file):
+            return
+        with open(json_file,"r") as fp:
+            json_data = json.load(fp)
+        self.from_dict(json_data)
+
+    def unload(self,path):
+        if not self.userid or not path:
+            return
+        os.makedirs(path,exist_ok=True)
+        json_data = self.to_dict()
+        json_file = self._file_path(path)
+        with open(json_file,"w") as fp:
+            json.dump(json_data,fp,indent=4)
+
+    def from_dict(self,json_data:dict):
+        # 基本情報
+        self.userid = json_data.get("userid",None)
+        self.name = json_data.get("name",None)
+        self.last_call = json_data.get("last_call",0)
+        # 個性
+        personal_dict:dict = json_data.get('personality',None)
+        if personal_dict:
+            pp = Personality()
+            pp.post_process = self.personality.post_process
+            pp.from_dict(personal_dict)
+        # 記憶
+        self.agent_memory.moving_summary_buffer = ""
+        self.memory.clear()   
+        mem_json:dict = json_data.get('memory',None)
+        if mem_json:
+            self.agent_memory.moving_summary_buffer = mem_json.get("summary","")
+            mesgs_json = mem_json.get("messages",None)
+            if mesgs_json and len(mesgs_json)>0:
+                megs = messages_from_dict(mesgs_json)
+                for m in megs:
+                    self.memory.add_message(m)
+
+    def to_dict(self) -> dict:
+        json_data = {
+            "userid": self.userid,
+            "name": self.name,
+            "last_call": self.last_call
+        }
+        if self.personality:
+            json_data['personality'] = self.personality.to_dict()
+        mem:dict = {}
+        if self.agent_memory.moving_summary_buffer:
+            mem['summary'] = self.agent_memory.moving_summary_buffer
+        if self.memory:
+            msgs = self.memory.messages
+            if msgs and len(msgs)>0:
+                mem['messages'] = messages_to_dict(msgs)
+        if len(mem)>0:
+            json_data['memory']=mem
+        return json_data
 
     def get_personality(self) -> Personality:
         return self.personality
@@ -280,21 +391,52 @@ def main():
     fh = logging.FileHandler("logs/openai-debug.log")
     logger.addHandler(fh)
 
-    repo : BotRepository = BotRepository()
+    agent_repo_path = "agents"
+    repo : BotRepository = BotRepository(agent_repo_path)
+    userid='b000'
+    agentB1 : BotAgent = repo.get_agent(userid)
+    agentB2 : BotAgent = repo.get_agent(userid)
+    if agentB1 != agentB2:
+        print("ERROR x")
+        return
+    repo.unload_min=0
+    repo._last_timer = 0
+    repo.call_timer()
+    repo.unload_min = 10
+    agentB3 : BotAgent = repo.get_agent(userid)
+    if agentB3 == agentB2:
+        print("ERROR x")
+        return
+
     userid='a001'
     agent : BotAgent = repo.get_agent(userid)
     print(f"agent {agent.userid}")
     agent2 : BotAgent = repo.get_agent(userid)
     print(f"agent {agent2.userid}")
+    if agent != agent2:
+        print("ERROR: 001")
+        return
 
     response = agent2.llm_run('今日はなにしてたの？')
     print(f"[TEST.RESULT]{response}")
     response = agent2.llm_run('天ぷらの作り方おしえて')
     print(f"[TEST.RESULT]{response}")
     agent2.last_call = int(time.time()) - 7*24*3600
-    response = agent2.llm_run('こんにちは、何日ぶりかな')
+
+    repo.unload_min=0
+    while repo.size()>0:
+        repo._last_timer = 0
+        repo.call_timer()
+    repo.unload_min = 10
+
+    agent3 : BotAgent = repo.get_agent(userid)
+    if agent3 == agent2:
+        print("ERROR: 002")
+        return
+
+    response = agent3.llm_run('こんにちは、何日ぶりかな')
     print(f"[TEST.RESULT]{response}")
-    response = agent2.llm_run('何か出来事がありましたか？')
+    response = agent3.llm_run('何か出来事がありましたか？')
     print(f"[TEST.RESULT]{response}")
 
 
