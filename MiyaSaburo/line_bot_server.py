@@ -24,6 +24,9 @@ from linebot.v3.webhooks import (
     TextMessageContent
 )
 from bot_agent import BotRepository, BotAgent
+from tools.ChatNewsTool import (
+    NewsData,NewsRepo
+)
 
 #-----------------------------------------
 # ログ設定
@@ -59,6 +62,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 agent_repo_path = "agents"
 os.makedirs(agent_repo_path,exist_ok=True)
 Repo = BotRepository(agent_repo_path)
+news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',qdr="h48")
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -75,7 +79,7 @@ def callback():
         abort(400)
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessage)
+@handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event:MessageEvent):
     botlogger.error("handle_message")
     msg_accept_queue.put(event)
@@ -85,8 +89,10 @@ def timer_loop_thread():
     while msg_running:
         try:
             time.sleep(0.2)
+            news_repo.call_timer()
             Repo.call_timer()
         except Exception as ex:
+            botlogger.error(ex)
             time.sleep(0.2)
         finally:
             pass
@@ -129,6 +135,7 @@ def message_threadx(event:MessageEvent):
         userid = event.source.user_id
         query = event.message.text
         agent = Repo.get_agent(userid)
+        agent.news_repo = news_repo
         reply = agent.llm_run(query)
     except Exception as ex:
         reply = "(orz)"
@@ -164,15 +171,16 @@ def main():
 
     # ssl
     import ssl
-    pem_file = 'certs/fullchain.pem'
-    Key_file = 'certs/privkey.pem'
+    certs_dir = "/usr/local/etc/letsencrypt/live/chickennanban.ddns.net"
+    pem_file = certs_dir + '/fullchain.pem'
+    Key_file = certs_dir + '/privkey.pem'
 
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.load_cert_chain( pem_file, Key_file )
 #    app.run()
-    #port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 5001))
     #app.run(host="0.0.0.0", port=port)
-    app.run( host='0.0.0.0', ssl_context=ssl_context )
+    app.run( host='0.0.0.0', port=port, ssl_context=ssl_context )
 
     # スレッドの終了を待機
     msg_running = False

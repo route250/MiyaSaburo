@@ -21,10 +21,11 @@ from langchain.prompts.chat import (
 from langchain.schema import SystemMessage, AIMessage, HumanMessage
 from langchain.schema import BaseMessage, BaseChatMessageHistory
 from libs.CustomChatMessageHistory import CustomChatMessageHistory
-from tools.webSearchTool import WebSearchTool
 from langchain import LLMMathChain
 from langchain.callbacks import get_openai_callback
 from langchain.schema import messages_from_dict, messages_to_dict
+from tools.webSearchTool import WebSearchTool
+from tools.ChatNewsTool import NewsRepo, NewsData
 
 
 def formatted_datetime():
@@ -201,6 +202,7 @@ class BotAgent:
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
+        self.news_repo : NewsRepo= None
 
     def _file_path(self,path):
         return f"{path}/model_{self.userid}.json"
@@ -315,7 +317,7 @@ class BotAgent:
             # prompt
                 
             # 記憶の整理
-            now = int(time.time())
+            now = int(time.time()) + 3600000
             ago_mesg = self.ago( now-self.last_call)
             if ago_mesg:
                 # 記憶を要約
@@ -331,8 +333,12 @@ class BotAgent:
                         self.agent_memory.max_token_limit = before
                     event_text.append(ago_mesg)
                 # 出来事を追加
+                if self.news_repo:
+                    news : NewsData = self.news_repo.random_get(self.userid)
+                    if news:
+                        event_text.append('Use this news in your comment.\n# URL:'+news.link+"\n# Article:" + news.snippet+"\n\nTell to Human abount this news.")
                 # self.event_promptで出来事を生成
-                if self.personality.event_prompt:
+                elif self.personality.event_prompt:
                     text = agent_llm.predict( self.personality.main_prompt + "\n" + self.personality.event_prompt, stop=["\n"])
                     if text:
                         event_text.append(text)

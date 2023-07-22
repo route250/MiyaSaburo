@@ -119,7 +119,7 @@ class WebSearchModule:
             pass
         return ""
 
-    def search_meta(self,aQuery, num=10):
+    def search_meta(self,aQuery, num=10,qdr=None):
 
         metadata_result = []
 
@@ -129,6 +129,8 @@ class WebSearchModule:
         zEncQuery = self.urlEncode(aQuery)
         #zURL = mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&gl=us&hl=en"
         zURL = WebSearchModule.mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&hl=en"
+        if qdr:
+            zURL += f"&tbs=qdr:{qdr}"
 
         try:
             # requestsを使用してWebページを取得
