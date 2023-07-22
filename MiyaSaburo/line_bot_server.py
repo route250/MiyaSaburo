@@ -75,20 +75,6 @@ def callback():
         abort(400)
     return 'OK'
 
-@app.route("/xbot/v1/line_bot/<channel>", methods=['POST'])
-def line_callback(channel):
-    # get X-Line-Signature header value
-    signature = request.headers['X-Line-Signature']
-    # get request body as text
-    body : bytes = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
-    # handle webhook body
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event:MessageEvent):
     botlogger.error("handle_message")
