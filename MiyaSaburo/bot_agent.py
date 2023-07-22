@@ -229,11 +229,10 @@ class BotAgent:
                     self.agent_memory.chat_memory.add_message( SystemMessage(content="\n".join(event_text)) )
             self.last_call = now
             # 回答の制限
-            stp=["！","？"]
-            if random.randint(0,3)==0:
+            if random.randint(0,5)==0:
                 stp=["。","\n"]
-            llm_model_kwargs = { "max_tokens": 500, "stop": stp }
-            agent_llm.model_kwargs = llm_model_kwargs
+                llm_model_kwargs = { "max_tokens": 500, "stop": stp }
+                agent_llm.model_kwargs = llm_model_kwargs
             # エージェントの準備
             agent_chain = initialize_agent(
                 self.tools, 
