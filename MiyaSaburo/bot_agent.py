@@ -317,7 +317,7 @@ class BotAgent:
             # prompt
                 
             # 記憶の整理
-            now = int(time.time()) + 3600000
+            now = int(time.time())
             ago_mesg = self.ago( now-self.last_call)
             if ago_mesg:
                 # 記憶を要約
