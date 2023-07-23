@@ -921,15 +921,15 @@ def LLM_process():
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False)
         web_tool = WebSearchTool()
 
-        schedule_repo = AITaskRepo()
-        schedule_tool = AITaskTool()
-        schedule_tool.bot_id = ai_id
-        schedule_tool.task_repo = schedule_repo
+        task_repo = AITaskRepo()
+        task_tool = AITaskTool()
+        task_tool.bot_id = ai_id
+        task_tool.task_repo = task_repo
 
         tools=[]
         tools += [
             web_tool,
-            schedule_tool,
+            task_tool,
             #langchain.tools.PythonAstREPLTool(),
             Tool(
                 name="Calculator",
@@ -1021,7 +1021,7 @@ def LLM_process():
             while running:
                 
                 if not ( thread and thread.is_alive() ) and llm_queue.qsize()==0:
-                    task : AITask = schedule_repo.get_task(ai_id)
+                    task : AITask = task_repo.get_task(ai_id)
                     if task:
                         q = "It's time to do that ```" + task.task + "```."+AppModel.LONG_BLANK
                         llm_queue.put((in_talk,q))
