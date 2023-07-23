@@ -1,6 +1,7 @@
 from typing import Type
 import sys
 import os
+from datetime import datetime, timezone
 from io import BytesIO
 import ctypes
 import math
@@ -26,6 +27,7 @@ from matplotlib.figure import Figure
 from libs.VoiceAPI import VoiceAPI
 from tools.QuietTool import QuietTool
 from tools.webSearchTool import WebSearchTool
+from tools.task_tool import TaskCmd, AITask, AITaskRepo, AITaskTool
 from libs.StrList import StrList
 
 import openai
@@ -895,6 +897,7 @@ def is_cancel(text):
         if w in text:
             return True
     return False
+
 import langchain.tools.python
 def LLM_process():
     """LLM"""
@@ -903,6 +906,7 @@ def LLM_process():
     global running
     global quiet_timer
     try:
+        ai_id="x001"
         remove_word = [
             "何かお手伝いできますか？",
             "どのようにお手伝いできますか？","どのようなお手伝いができますか？",
@@ -916,10 +920,16 @@ def LLM_process():
         # ツールの準備
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False)
         web_tool = WebSearchTool()
+
+        schedule_repo = AITaskRepo()
+        schedule_tool = AITaskTool()
+        schedule_tool.bot_id = ai_id
+        schedule_tool.task_repo = schedule_repo
+
         tools=[]
         tools += [
             web_tool,
-            QuietTool(),
+            schedule_tool,
             #langchain.tools.PythonAstREPLTool(),
             Tool(
                 name="Calculator",
@@ -1007,8 +1017,15 @@ def LLM_process():
             last_queue=""
             thread :threading.Thread = None
             talk_id = 0
+            in_talk = 0
             while running:
                 
+                if not ( thread and thread.is_alive() ) and llm_queue.qsize()==0:
+                    task : AITask = schedule_repo.get_task(ai_id)
+                    if task:
+                        q = "It's time to do that ```" + task.task + "```."+AppModel.LONG_BLANK
+                        llm_queue.put((in_talk,q))
+
                 if llm_queue.qsize()==0:
                     time.sleep(0.5)
                     continue

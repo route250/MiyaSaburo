@@ -27,6 +27,7 @@ from bot_agent import BotRepository, BotAgent
 from tools.ChatNewsTool import (
     NewsData,NewsRepo
 )
+from tools.task_tool import TaskCmd, AITask, AITaskRepo, AITaskTool
 
 #-----------------------------------------
 # ログ設定
@@ -57,12 +58,13 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 agent_repo_path = "agents"
 os.makedirs(agent_repo_path,exist_ok=True)
 Repo = BotRepository(agent_repo_path)
 news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',qdr="h48")
+task_repo = AITaskRepo()
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -74,12 +76,12 @@ def callback():
     app.logger.info("Request body: " + body)
     # handle webhook body
     try:
-        handler.handle(body, signature)
+        line_webhook_handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
     return 'OK'
 
-@handler.add(MessageEvent, message=TextMessageContent)
+@line_webhook_handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event:MessageEvent):
     botlogger.error("handle_message")
     msg_accept_queue.put(event)
@@ -135,6 +137,7 @@ def message_threadx(event:MessageEvent):
         userid = event.source.user_id
         query = event.message.text
         agent = Repo.get_agent(userid)
+        agent.task_repo = task_repo
         agent.news_repo = news_repo
         reply = agent.llm_run(query)
     except Exception as ex:

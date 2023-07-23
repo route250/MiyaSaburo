@@ -10,6 +10,7 @@ from langchain.chains.conversation.memory import ConversationBufferMemory,Conver
 from langchain.memory import ConversationTokenBufferMemory
 from langchain.prompts import MessagesPlaceholder
 from langchain.chat_models import ChatOpenAI
+from langchain.agents.agent import AgentExecutor
 from langchain.agents.agent_types import AgentType
 from langchain.agents import initialize_agent, Tool, load_tools
 from langchain.prompts.chat import (
@@ -26,7 +27,7 @@ from langchain.callbacks import get_openai_callback
 from langchain.schema import messages_from_dict, messages_to_dict
 from tools.webSearchTool import WebSearchTool
 from tools.ChatNewsTool import NewsRepo, NewsData
-
+from tools.task_tool import TaskCmd, AITask, AITaskRepo, AITaskTool
 
 def formatted_datetime():
     # オペレーティングシステムのタイムゾーンを取得
@@ -39,6 +40,13 @@ def formatted_datetime():
 def _handle_error(error) -> str:
     return str(error)[:50]
 
+class BotTimerTask:
+    def __init__(self,userid:str,time:int,callback,title=None):
+        self.userid = userid
+        self.time = time
+        self.callback = callback
+        self.title = title
+
 class BotRepository:
     def __init__(self, path):
         self._lock = threading.Lock()
@@ -46,6 +54,7 @@ class BotRepository:
         self._map :dict = dict()
         self.repo_path = path
         self.unload_min = 10
+        self.timer_task_list = list[BotTimerTask]
 
     def size(self) ->int:
         return len(self._map)
@@ -78,6 +87,10 @@ class BotRepository:
                     break
         finally:
             self._lock.release()
+    
+    def add_timer_task(self,userid:str,time:int,callback,title=None):
+        task = BotTimerTask(userid,time,callback,title=title)
+        self.timer_task_list.append(task)
 
 class Personality:
     def __init__(self):
@@ -163,10 +176,13 @@ class BotAgent:
         # ツールの準備
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False)
         web_tool = WebSearchTool()
+        self.task_tool = AITaskTool()
+        self.task_tool.bot_id = self.userid
         self.tools=[]
         self.tools += [
             web_tool,
             #langchain.tools.PythonAstREPLTool(),
+            self.task_tool,
             Tool(
                 name="Calculator",
                 func=llm_math_chain.run,
@@ -202,6 +218,7 @@ class BotAgent:
         self.name = ''
         self.anser_list = []
         self.last_call = int(time.time())
+        self.task_repo : AITaskRepo = None
         self.news_repo : NewsRepo= None
 
     def _file_path(self,path):
@@ -297,6 +314,8 @@ class BotAgent:
         agent_chain = None
         agent_llm = None
         try:
+            self.task_tool.task_repo = self.task_repo
+
             print(f"[LLM] you text:{query}")
             agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
             # 現在の時刻を取得
@@ -350,8 +369,8 @@ class BotAgent:
                 stp=["。","\n"]
                 llm_model_kwargs = { "max_tokens": 500, "stop": stp }
                 agent_llm.model_kwargs = llm_model_kwargs
-            # エージェントの準備
-            agent_chain = initialize_agent(
+            # エージェントの準備e
+            agent_chain : AgentExecutor = initialize_agent(
                 self.tools, 
                 agent_llm, 
                 agent=AgentType.OPENAI_FUNCTIONS,
