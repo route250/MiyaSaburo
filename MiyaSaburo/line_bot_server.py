@@ -17,6 +17,7 @@ from linebot.v3.messaging import (
     ApiClient,
     MessagingApi,
     ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage
 )
 from linebot.v3.webhooks import (
@@ -62,7 +63,7 @@ line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 agent_repo_path = "agents"
 os.makedirs(agent_repo_path,exist_ok=True)
-Repo = BotRepository(agent_repo_path)
+bot_repo = BotRepository(agent_repo_path)
 news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',qdr="h48")
 task_repo = AITaskRepo()
 
@@ -81,34 +82,54 @@ def callback():
         abort(400)
     return 'OK'
 
+class RequestData:
+    def __init__(self,event:MessageEvent=None, task:AITask=None):
+        self.message_event:MessageEvent = None
+        self.task:AITask = None
+        if event:
+            self.userid = event.source.user_id
+            self.query = event.message.text
+            self.message_event:MessageEvent = event
+        elif task:
+            self.userid = task.bot_id
+            self.query = "It's the reserved time, so you do \"" + task.action + "\" in now for \"" + task.purpose +"\"."
+            self.task:AITask = task
+        else:
+            raise Exception("invalid request?")
+
 @line_webhook_handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event:MessageEvent):
     botlogger.error("handle_message")
     msg_accept_queue.put(event)
 
-def timer_loop_thread():
-    global msg_running
-    while msg_running:
-        try:
-            time.sleep(0.2)
-            news_repo.call_timer()
-            Repo.call_timer()
-        except Exception as ex:
-            botlogger.error(ex)
-            time.sleep(0.2)
-        finally:
-            pass
-
 def message_accept_thread():
     global msg_running
     while msg_running:
         try:
-            event = msg_accept_queue.get(block=True,timeout=5)
+            event : MessageEvent = msg_accept_queue.get(block=True,timeout=5)
             if event:
-                botlogger.error("accept")
+                botlogger.debug("accept")
+                msg_exec_queue.put( RequestData(event=event) )
                 msg_accept_queue.task_done()
-                msg_exec_queue.put( event )
         except Exception as ex:
+            time.sleep(0.2)
+        finally:
+            pass
+
+def timer_loop_thread():
+    global msg_running
+    while msg_running:
+        try:
+            time.sleep(0.5)
+            list : list[AITask]= task_repo.timer_event()
+            if list:
+                for t in list:
+                    msg_exec_queue.put(RequestData(task=t))
+            else:
+                news_repo.call_timer()
+                bot_repo.call_timer()
+        except Exception as ex:
+            botlogger.exception("")
             time.sleep(0.2)
         finally:
             pass
@@ -117,11 +138,10 @@ def message_loop_thread():
     global msg_running
     while msg_running:
         try:
-            event:MessageEvent = msg_exec_queue.get(block=True,timeout=5)
-            if event:
+            request:RequestData = msg_exec_queue.get(block=True,timeout=5)
+            if request:
                 try:
-                    botlogger.error("submit")
-                    message_threadx(event)
+                    message_threadx(request)
                 finally:
                     msg_exec_queue.task_done()
         except Exception as ex:
@@ -130,34 +150,45 @@ def message_loop_thread():
         finally:
             pass
 
-def message_threadx(event:MessageEvent):
+#　これが３スレッド動くはず
+def message_threadx(request:RequestData):
     reply = 'zzzzz.......'
     try:
-        botlogger.error("xxx start")
-        userid = event.source.user_id
-        query = event.message.text
-        agent = Repo.get_agent(userid)
+        botlogger.debug("xxx start")
+        userid = request.userid
+        query = request.query
+        agent = bot_repo.get_agent(userid)
         agent.task_repo = task_repo
         agent.news_repo = news_repo
         reply = agent.llm_run(query)
     except Exception as ex:
         reply = "(orz)"
-        botlogger.error(ex)
+        botlogger.exception("")
         print(ex)
     try:
-        botlogger.error("response")
+        botlogger.debug("response")
         with ApiClient(line_config) as api_client:
             line_bot_api = MessagingApi(api_client)
-            line_bot_api.reply_message_with_http_info(
-                ReplyMessageRequest(
-                    replyToken=event.reply_token,
-                    messages=[TextMessage(text=reply)]
+            if request.message_event:
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        replyToken=request.message_event.reply_token,
+                        messages=[TextMessage(text=reply)]
+                    )
                 )
-            )
+            elif request.task:
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=userid,
+                        messages=[TextMessage(text=reply)]
+                    )
+                )
+            else:
+                logger.error("invalid request. no event and no task")
     except Exception as ex:
-        botlogger.error(ex)
+        botlogger.exception("")
         print(ex)
-    botlogger.error("xxx end")
+    botlogger.info("xxx end")
 
 def main():
     global msg_running

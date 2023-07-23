@@ -1,27 +1,17 @@
 import queue
 import time
-from zoneinfo import ZoneInfo
 from enum import Enum
 from pydantic import Field, BaseModel
 from typing import Optional, Type, Callable
-from datetime import datetime, timezone
+
 import threading
 from langchain.callbacks.manager import AsyncCallbackManagerForToolRun, CallbackManagerForToolRun
 from langchain.tools.base import BaseTool
+from libs.utils import Utils
 
-JST = ZoneInfo("Asia/Tokyo")
+import logging
+logger = logging.getLogger("task_tool")
 
-def to_unix_timestamp_seconds( date_time:str) -> int:
-    # 日付文字列をdatetimeオブジェクトに変換
-    dt_object = datetime.strptime(date_time, '%Y/%m/%d %H:%M:%S')
-    # Unix時間に変換 (秒単位)
-    time = int(dt_object.replace(tzinfo=JST).timestamp())
-    return time
-def from_unix_timestamp_seconds(unix_time: int) -> str:
-    # Unix時間をdatetimeオブジェクトに変換
-    dt_object = datetime.fromtimestamp(unix_time, JST)
-    # フォーマットに変換して返す
-    return dt_object.strftime('%Y/%m/%d %H:%M:%S')
 class TaskCmd(str, Enum):
     add = 'add'
     cancel = 'cancel'
@@ -29,13 +19,14 @@ class TaskCmd(str, Enum):
 
 class AITask:
     _instance_count = 0
-    def __init__(self, ai_id:str, date_time:str, task:str ):
+    def __init__(self, bot_id:str, date_time:str, purpose:str=None, action:str=None ):
         self.task_id = AITask._instance_count
         AITask._instance_count+=1
-        self.ai_id = ai_id
+        self.bot_id = bot_id
         self.date_time = date_time
-        self.time_sesc = to_unix_timestamp_seconds(date_time)
-        self.task = task
+        self.time_sec = Utils.to_unix_timestamp_seconds(date_time)
+        self.purpose = Utils.strip(purpose)
+        self.action = Utils.strip(action)
 
 class AITaskRepo:
 
@@ -44,25 +35,25 @@ class AITaskRepo:
         self._last_call = 0
         self.task_queue = queue.Queue()
 
-    def call( self, bot_id:str, cmd : TaskCmd, date_time : str, task: str ):
+    def call( self, bot_id:str, cmd : TaskCmd, date_time : str, purpose: str = None, action: str = None ):
         if cmd == TaskCmd.add:
-            task = AITask( bot_id, date_time, task )
+            task = AITask( bot_id, date_time, purpose, action )
             self._task_list.append(task)
             return "Reserved at "+date_time
         elif cmd == TaskCmd.cancel:
-            tt = []
+            new_list = []
             for t in self._task_list:
-                if t.date_time != date_time or (task and t.task != task):
-                    tt.append(t)
-            removed = len(self._task_list)-len(tt)
+                if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
+                    new_list.append(t)
+            removed = len(self._task_list)-len(new_list)
             if removed>0:
-                self._task_list = tt
+                self._task_list = new_list
                 return "Cancelled from " + date_time
             else:
                 return "Not found task in " + date_time
         elif cmd == TaskCmd.get:
-            if len(self.task_task_list_map)>0:
-                return " ".join([ f"{t.date_time} {t.task}" for t in self._task_list])
+            if len(self._task_list)>0:
+                return " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
             else:
                 return "no tasks."
 
@@ -71,7 +62,7 @@ class AITaskRepo:
         task_list = []
         submit_list = []
         for t in self._task_list:
-            if t.time_sesc<=now_sec:
+            if t.time_sec<=now_sec:
                 submit_list.append(t)
             else:
                 task_list.append(t)
@@ -79,23 +70,30 @@ class AITaskRepo:
         return submit_list
 
     def get_task(self,ai_id:str) -> AITask:
+        size = len(self._task_list)
+        if size==0:
+            return None
         now_sec = int( time.time() )
-        task_list = []
-        submit = None
-        for t in self._task_list:
-            if submit or t.ai_id != ai_id or t.time_sesc>now_sec:
-                task_list.append(t)
-            else:
-                submit = t
-        self._task_list = task_list
+        idx = 0
+        while idx<size:
+            task = self._task_list[idx]
+            if task.bot_id == ai_id and task.time_sec <= now_sec:
+                break
+            idx+=1
+        if idx>=size:
+            return None
+        submit = self._task_list[idx]
+        del self._task_list[idx]
         return submit
 
-# 入力パラメータを定義するモデル
+# Toolの入力パラメータを定義するモデル
 class AITaskInput(BaseModel):
     cmd: TaskCmd
-    date_time: str = Field( ..., description='Time to reserve a task by YYYY/MM/DD HH:MM:SS')
-    task: str = Field( ..., description='Instructions for you to perform this task')
+    date_time: str = Field( '', description='Time to reserve a task by YYYY/MM/DD HH:MM:SS. If you unclear the time, then ask to user')
+    purpose: str = Field( '', description='why do it and goals to achieve')
+    action: str = Field( '', description='what you should do.')
 
+# LangChainのAgentに渡すtool
 class AITaskTool(BaseTool):
 
     name = "AITaskTool"
@@ -103,22 +101,34 @@ class AITaskTool(BaseTool):
     # 入力パラメータのスキーマを定義
     args_schema: Optional[Type[BaseModel]] = AITaskInput
 
+    # Repoは、複数のAIで共用するが
+    # Toolは一つのAIに対して一個インスタンスすること
     bot_id : str = None
     task_repo: AITaskRepo = None
 
-    def _run( self, cmd:TaskCmd, date_time: str='', task:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
+    def _run( self, cmd:TaskCmd, date_time: str='', purpose:str='', action:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
         try:
-            res = self.task_repo.call( self.bot_id, cmd, date_time, task )
-            if res:
-                return res
-            if cmd == TaskCmd.add:
-                return "Reserved at "+date_time
-            elif cmd == TaskCmd.cancel:
-                return "Cancelled " + date_time
-            elif cmd == TaskCmd.get:
-                return "Cancelled " + date_time
+            header = ""
+            now = int(time.time())
+            sec = Utils.to_unix_timestamp_seconds(date_time)
+            if sec < (now-10):
+                if cmd == TaskCmd.add:
+                    return f"\"{date_time}\" is ambiguous. Ask the user for the time."
+                elif cmd == TaskCmd.cancel:
+                    cmd = TaskCmd.get
+                    header = f"\"{date_time}\" is ambiguous. Select from belows. "
+            if self.task_repo:
+                res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
+                if res:
+                    return header + res
+                if cmd == TaskCmd.add:
+                    return "Reserved at "+date_time
+                elif cmd == TaskCmd.cancel:
+                    return "Cancelled " + date_time
+                elif cmd == TaskCmd.get:
+                    return "Cancelled " + date_time
         except Exception as ex:
-            print(ex)
+            logger.exception("")
         return "System Error"
 
     async def _arun(self, query: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None) -> str:
@@ -129,9 +139,9 @@ class AITaskTool(BaseTool):
 def main():
 
     sec1 = int( time.time() )
-    dt1 = from_unix_timestamp_seconds(sec1)
-    sec2 = to_unix_timestamp_seconds(dt1)
-    dt2 = from_unix_timestamp_seconds(sec2)
+    dt1 = Utils.from_unix_timestamp_seconds(sec1)
+    sec2 = Utils.to_unix_timestamp_seconds(dt1)
+    dt2 = Utils.from_unix_timestamp_seconds(sec2)
     print(sec1)
     print(dt1)
     print(sec2)

@@ -1,5 +1,6 @@
 from typing import Type
 import sys
+import traceback
 import os
 from datetime import datetime, timezone
 from io import BytesIO
@@ -186,7 +187,7 @@ class AppModel(threading.Thread):
                 thread.join(timeout=0.2)
             print("[Thread]stopped")
         except Exception as ex:
-            print(ex)
+            traceback.print_exc()
 
     def next_id(self):
         i = self.__count
@@ -279,7 +280,7 @@ def find_available_microphones():
                 microphones.append((name, index))
         p.terminate()
     except Exception as ex:
-        print(ex)        
+        traceback.print_exc()
     print("[MIC]end")
     return microphones
 
@@ -382,7 +383,7 @@ def force_interrupt(target_thread: threading.Thread) -> bool:
             print('Failure in raising exception')
 
     except Exception as ex:
-        print(ex)
+        traceback.print_exc()
 
     return False
 
@@ -408,7 +409,7 @@ def recoard_audio():
                         frame_queue.put((Model.play_talk_id,frames))
                 except Exception as ex:
                     Model.audio_state.set_error(True)
-                    print(ex)
+                    traceback.print_exc()
                 finally:
                     if stream.is_active:
                         stream.stop_stream()
@@ -419,7 +420,7 @@ def recoard_audio():
                 time.sleep(0.5)
     except Exception as ex:
         Model.audio_state.set_error(True)
-        print(ex)
+        traceback.print_exc()
     finally:
         print("[rec_audio]exit")
         frame_queue.put(None)
@@ -715,7 +716,7 @@ def process_audio():
                     pos = buffer_len
                     detect.d_end(buffer_len)
         except Exception as ex:
-            print(ex)
+            traceback.print_exc()
         finally:
             pass
     finally:
@@ -884,6 +885,7 @@ def process_audio2():
                             xpos_start = hist_len + 1
                             xpos_end = xpos_start
         except Exception as ex:
+            traceback.print_exc()
             print("[process_audio]"+ex.__class__.__name__+" "+ex)
         finally:
             pass
@@ -988,7 +990,9 @@ def LLM_process():
                 callback_hdr.talk_id = Model.talk_id
                 callback_hdr.message_callback = token_callback
                 callback_hdr.action_callback = tool_callback
-                agent_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True)
+                req_timeout = (10.0, 30.0)
+                req_retries=0
+                agent_llm = ChatOpenAI(temperature=0.7, max_tokens=2000, model=openai_model, streaming=True,request_timeout=req_timeout,max_retries=req_retries)
                 # エージェントの準備
                 agent_chain = initialize_agent(
                     tools, 
@@ -999,14 +1003,23 @@ def LLM_process():
                     agent_kwargs=agent_kwargs, 
                     handle_parsing_errors=_handle_error
                 )
-                res_text = agent_chain.run(input=query,callbacks=[callback_hdr])
+                x=0
+                while x<3:
+                    try:
+                        res_text = agent_chain.run(input=query,callbacks=[callback_hdr])
+                        break
+                    except openai.error.APIError as ex:
+                        if not "You can retry your request" in str(ex):
+                            raise ex
+                        print(ex)
+                    x+=1
                 print(f"[LLM] GPT text:{res_text}")
             except KeyboardInterrupt as ex:
                 print("[LLM] cancel" )
             except openai.error.APIError as ex:
-                print(ex)
+                traceback.print_exc()
             except Exception as ex:
-                print(ex)
+                traceback.print_exc()
             finally:
                 Model.llm_state.set_running(False)
                 wave_queue.put( (callback_hdr.talk_id,MARK_END) )
@@ -1023,7 +1036,7 @@ def LLM_process():
                 if not ( thread and thread.is_alive() ) and llm_queue.qsize()==0:
                     task : AITask = task_repo.get_task(ai_id)
                     if task:
-                        q = "It's time to do that ```" + task.task + "```."+AppModel.LONG_BLANK
+                        q = "It's the reserved time, so you do \"" + task.action + "\" in now for \"" + task.purpose +"\"."+AppModel.LONG_BLANK
                         llm_queue.put((in_talk,q))
 
                 if llm_queue.qsize()==0:
@@ -1083,7 +1096,7 @@ def LLM_process():
                         App.llm_send_text.insert(1.0,query)
                 now = int(time.time()*1000)
         except Exception as ex:
-            print(ex)
+            traceback.print_exc()
         finally:
             pass
     finally:
@@ -1125,7 +1138,7 @@ def wave_process():
                     audio_bytes :bytes = Model.voice_api.text_to_audio(text,lang=Model.lang_out[:2])
                     talk_queue.put( (talk_id,text,audio_bytes) )
                 except Exception as e:
-                    print(e)
+                    traceback.print_exc()
                 finally:
                     Model.wave_state.set_running(False)
             else:
@@ -1134,7 +1147,7 @@ def wave_process():
                 App.chat_hist.insert(tk.END,text)
                 App.chat_hist.see('end')
     except Exception as ex:
-        print(ex)
+        traceback.print_exc()
     finally:
         print("[WAVE]exit")
         talk_queue.put(None)
@@ -1199,7 +1212,7 @@ def talk_process():
                         init = 0
                     time.sleep(0.2)
         except Exception as ex:
-            print(ex)
+            traceback.print_exc()
         finally:
             print("[TALK]quit")
             pygame.mixer.quit()
@@ -1500,7 +1513,7 @@ def main():
         # アプリケーションの実行
         App.mainloop()
     except Exception as ex:
-        print(ex)
+        traceback.print_exc()
     finally:
         running = False
 
