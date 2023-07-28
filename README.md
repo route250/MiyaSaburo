@@ -15,6 +15,13 @@
 
 lineDevelopersでlineボットのチャンネルを作って下さい
 
+python仮想環境を作って下さい
+$ python3 -m venv .Bot
+pythonモジュールをインストールして下さい
+$ source .Bot/bin/active
+$ pip inlstall -U pip
+$ pip install flask line-bot-sdk langchain openai lxml matplotlib pandas scipy scikit-learn
+
 サーバーにコピーして下さい
 $ git clone https://github.com/route250/MiyaSaburo.git
 
@@ -32,4 +39,8 @@ firewall-cmdやufwコマンド等
 lineボットのwebhookを設定して下さい
 https://あなたのサーバ:5000/callback
 
-
+参考)
+仮想マシンへのPortForward
+https://redj.hatenablog.com/entry/2019/02/18/025503
+仮想マシンの固定IP
+https://seekt.hatenablog.com/entry/2022/05/21/102603

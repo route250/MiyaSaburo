@@ -25,5 +25,7 @@ deactive >/dev/null 2>&1
 
 source ../.Bot/bin/activate
 
+mkdir -p logs
+
 python3 MiyaSaburo/line_bot_server.py
 
