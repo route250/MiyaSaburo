@@ -5,7 +5,8 @@ import re
 import requests
 import lxml.html
 import urllib.parse
-
+from enum import Enum
+from pydantic import Field, BaseModel
 from langchain.tools.base import BaseTool
 from typing import Optional, Type
 
@@ -191,13 +192,19 @@ class WebSearchModule:
 
         return metadata_result
 
+# Toolの入力パラメータを定義するモデル
+class WebSearchInput(BaseModel):
+    query: str = Field( '', description='query for google search')
+
 class WebSearchTool(BaseTool):
     name = "WebSearchTool"
     description = (
         "A search engine of Web."
         "Useful for when you need to answer questions about current events from internet content."
-        "Input should be a search query."
     )
+    # 入力パラメータのスキーマを定義
+    args_schema: Optional[Type[BaseModel]] = WebSearchInput
+    
     module : WebSearchModule = WebSearchModule()
 
     def get_weather(self) -> str:
