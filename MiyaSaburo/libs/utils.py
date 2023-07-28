@@ -34,3 +34,10 @@ class Utils:
         dt_object = datetime.fromtimestamp(unix_time, Utils.JST)
         # フォーマットに変換して返す
         return dt_object.strftime('%Y/%m/%d %H:%M:%S')
+
+    @staticmethod
+    def to_int( value:str, default=0 ) -> int:
+        try:
+            return int(value)
+        except:
+            return default
