@@ -204,7 +204,7 @@ class WebSearchTool(BaseTool):
     )
     # 入力パラメータのスキーマを定義
     args_schema: Optional[Type[BaseModel]] = WebSearchInput
-    
+
     module : WebSearchModule = WebSearchModule()
 
     def get_weather(self) -> str:
@@ -229,6 +229,8 @@ class WebSearchToolJ(BaseTool):
         "Useful for when you need to answer questions about current events from internet content."
         "Input should be a search query. Output is a JSON array of the query results"
     )
+    # 入力パラメータのスキーマを定義
+    args_schema: Optional[Type[BaseModel]] = WebSearchInput
     module : WebSearchModule = WebSearchModule()
 
     def get_weather(self) -> str:
