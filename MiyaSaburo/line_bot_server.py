@@ -29,6 +29,7 @@ from tools.ChatNewsTool import (
     NewsData,NewsRepo
 )
 from tools.task_tool import TaskCmd, AITask, AITaskRepo, AITaskTool
+from libs.utils import Utils
 
 #-----------------------------------------
 # ログ設定
@@ -57,6 +58,7 @@ msg_running : bool = False
 #環境変数取得
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
+LINE_WEBHOOK_PORT = os.environ["LINE_WEBHOOK_PORT"]
 
 line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -211,9 +213,8 @@ def main():
 
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.load_cert_chain( pem_file, Key_file )
-#    app.run()
-    port = int(os.getenv("PORT", 5001))
-    #app.run(host="0.0.0.0", port=port)
+
+    port = Utils.to_int(LINE_WEBHOOK_PORT, 5001)
     app.run( host='0.0.0.0', port=port, ssl_context=ssl_context )
 
     # スレッドの終了を待機
