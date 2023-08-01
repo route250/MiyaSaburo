@@ -108,9 +108,10 @@ class AITaskTool(BaseTool):
 
     def _run( self, cmd:TaskCmd, date_time: str='', purpose:str='', action:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
         try:
+            logger.info(f"start {cmd},{date_time},{purpose},{action}")
             header = ""
             now = int(time.time())
-            sec = Utils.to_unix_timestamp_seconds(date_time)
+            sec = Utils.to_unix_timestamp_seconds(date_time) if date_time and len(date_time)>0 else 0
             if sec < 10:
                 if cmd == TaskCmd.add:
                     return f"\"{date_time}\" is ambiguous. Ask the user for the time."
@@ -123,12 +124,16 @@ class AITaskTool(BaseTool):
             if self.task_repo:
                 res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
                 if res:
+                    logger.info(f"end {header+res}")
                     return header + res
                 if cmd == TaskCmd.add:
+                    logger.info(f"fail")
                     return "Reserved at "+date_time
                 elif cmd == TaskCmd.cancel:
+                    logger.info(f"fail")
                     return "Cancelled " + date_time
                 elif cmd == TaskCmd.get:
+                    logger.info(f"fail")
                     return "Cancelled " + date_time
             else:
                 logger.error("task_repo is null")
