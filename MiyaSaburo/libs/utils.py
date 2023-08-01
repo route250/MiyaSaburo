@@ -28,7 +28,7 @@ class Utils:
             time = int(dt_object.replace(tzinfo=Utils.JST).timestamp())
             return time
         except:
-            Utils.logger.exception(date_time)
+            Utils.logger.exception(f"date_time:\"{date_time}\"")
             return 0
 
     @staticmethod
