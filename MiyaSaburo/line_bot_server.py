@@ -200,7 +200,7 @@ def message_threadx(request:RequestData):
                     )
                 )
             else:
-                logger.error("invalid request. no event and no task")
+                botlogger.error("invalid request. no event and no task")
     except Exception as ex:
         botlogger.exception("")
         print(ex)
