@@ -33,23 +33,13 @@ from libs.CustomChatMessageHistory import CustomChatMessageHistory
 from tools.ChatNewsTool import NewsData, NewsRepo
 from tools.task_tool import AITask, AITaskRepo, AITaskTool, TaskCmd
 from tools.webSearchTool import WebSearchTool
+from libs.utils import Utils
 
 from libs.bot_model import AbstractBot
 from libs.logging_callback_handler import LoggerCallbackHdr
 from libs.extends_memory import ExtConversationSummaryBufferMemory
 
 langchain.debug=False
-
-def formatted_datetime():
-    # オペレーティングシステムのタイムゾーンを取得
-    system_timezone = time.tzname[0]
-    # 現在のローカル時刻を取得
-    current_time = time.localtime()
-    # 日時を指定されたフォーマットで表示
-    formatted = time.strftime(f"%a %b %d %H:%M {system_timezone} %Y", current_time)
-    return formatted
-def _handle_error(error) -> str:
-    return str(error)[:50]
 
 class BotTimerTask:
     def __init__(self,userid:str,time:int,callback,title=None):
@@ -385,7 +375,7 @@ class BotAgent(AbstractBot):
                 prompt = prompt.replace("{bot_name}",self.name)
         if "{current_datetime}" in prompt:
             # 現在の時刻を取得
-            formatted_time = formatted_datetime()
+            formatted_time = Utils.formatted_datetime()
             prompt = prompt.replace("{current_datetime}",formatted_time)
         if "{current_location}" in prompt:
             if self.current_location is None or len(self.current_location)==0:
@@ -465,18 +455,21 @@ class BotAgent(AbstractBot):
             )
             import langchain
             langchain.debug=False
+            save_max_tokens = agent_llm.max_tokens
             save_temperature = agent_llm.temperature
             try:
-                for t in range(0,1):
+                for t in range(0,2):
                     try:
                         res_text = agent_chain.run(input=query)
                         break
                     except OutputParserException as ex:
-                        self.log_error("",ex)
+                        self.log_error( "",ex)
                         res_text = f"{ex}"
                         self._ai_message(talk_id,res_text)
                         agent_llm.temperature = 0
+                        agent_llm.max_tokens += 100
             finally:
+                agent_llm.max_tokens = save_max_tokens
                 agent_llm.temperature = save_temperature
 
             anser = res_text

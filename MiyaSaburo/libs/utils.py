@@ -1,9 +1,13 @@
 
+import logging
 import time
 from zoneinfo import ZoneInfo
 from datetime import datetime, timezone
 
 class Utils:
+
+    logger = logging.getLogger(__name__)
+    JST = ZoneInfo("Asia/Tokyo")
 
     @staticmethod
     def is_empty( text:str=None ) -> bool:
@@ -15,8 +19,6 @@ class Utils:
             return text
         return None
 
-    JST = ZoneInfo("Asia/Tokyo")
-
     @staticmethod
     def to_unix_timestamp_seconds( date_time:str) -> int:
         try:
@@ -26,6 +28,7 @@ class Utils:
             time = int(dt_object.replace(tzinfo=Utils.JST).timestamp())
             return time
         except:
+            Utils.logger.exception(date_time)
             return 0
 
     @staticmethod
@@ -36,8 +39,33 @@ class Utils:
         return dt_object.strftime('%Y/%m/%d %H:%M:%S')
 
     @staticmethod
+    def formatted_datetime():
+        # オペレーティングシステムのタイムゾーンを取得
+        #system_timezone = time.tzname[0]
+        # 現在のローカル時刻を取得
+        #current_time = time.localtime()
+        # 日時を指定されたフォーマットで表示
+        #formatted = time.strftime(f"%a %b %d %H:%M {system_timezone} %Y", current_time)
+        jdt = datetime.now().astimezone(Utils.JST)
+        # 日時を指定されたフォーマットで表示
+        formatted = jdt.strftime(f"%a %b %d %H:%M %Z %Y")
+        return formatted
+
+    @staticmethod
     def to_int( value:str, default=0 ) -> int:
         try:
             return int(value)
         except:
             return default
+
+if __name__ == "__main__":
+    j = Utils.formatted_datetime()
+    print(f"now {j}")
+    now = int(time.time())
+    x = "2023/08/02 06:51:00"
+    s = Utils.to_unix_timestamp_seconds(x)
+    d = s-now
+    print(f"{x}")
+    print(f"{s}")
+    print(f"{now}")
+    print(f"{d}")

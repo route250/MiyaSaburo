@@ -111,12 +111,15 @@ class AITaskTool(BaseTool):
             header = ""
             now = int(time.time())
             sec = Utils.to_unix_timestamp_seconds(date_time)
-            if sec < (now-10):
+            if sec < 10:
                 if cmd == TaskCmd.add:
                     return f"\"{date_time}\" is ambiguous. Ask the user for the time."
                 elif cmd == TaskCmd.cancel:
                     cmd = TaskCmd.get
                     header = f"\"{date_time}\" is ambiguous. Select from belows. "
+            elif sec < (now-10):
+                if cmd == TaskCmd.add:
+                    return f"\"{date_time}\" is passt time. Ask the user for the time."
             if self.task_repo:
                 res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
                 if res:

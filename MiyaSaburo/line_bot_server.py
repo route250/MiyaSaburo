@@ -35,16 +35,30 @@ from libs.utils import Utils
 # ログ設定
 #-----------------------------------------
 import logging
-root_logger = logging.getLogger()
-fh = logging.FileHandler("logs/linebot-openai.log")
-root_logger.addHandler(fh)
+from logging.handlers import TimedRotatingFileHandler
+log_date_format = '%Y-%m-%d %H:%M:%S'
+log_format = '%(asctime)s [%(levelname)s] %(name)s %(message)s'
+log_formatter = logging.Formatter(log_format, log_date_format)
+root_logger : logging.Logger = logging.getLogger()
+root_fh = TimedRotatingFileHandler('logs/line-bot_log',when='midnight',backupCount=7,interval=1,encoding='utf-8')
+root_fh.setFormatter(log_formatter)
+root_fh.addHandler(root_fh)
 
-logger = logging.getLogger("openai")
-logger.setLevel( logging.DEBUG )
+console_hdr = logging.StreamHandler()
+console_hdr.setLevel( logging.INFO )
+console_hdr.setFormatter(log_formatter)
+root_logger.addHandler( console_hdr )
+
+openai_logger = logging.getLogger("openai")
+openai_logger.setLevel( logging.DEBUG )
+openai_logger.propagate = False
+openai_fh = TimedRotatingFileHandler('logs/openai_log',when='midnight',backupCount=7,interval=1,encoding='utf-8')
+openai_fh.setFormatter(log_formatter)
+openai_logger.addHandler(openai_fh)
 
 app = Flask(__name__)
 app.logger.removeHandler(default_handler)
-app.logger.addHandler(fh)
+app.logger.propagate = True
 
 botlogger = logging.getLogger("line_bot")
 botlogger.setLevel( logging.DEBUG )
