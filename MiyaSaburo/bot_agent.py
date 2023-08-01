@@ -1,33 +1,44 @@
 
-import os
-import time
-import threading
-import re
-import random
 import json
+import os
+import random
+import re
+import threading
+import time
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import typing
+
 import openai
-from langchain.chains.conversation.memory import ConversationBufferMemory,ConversationBufferWindowMemory,ConversationSummaryBufferMemory
-from langchain.memory import ConversationTokenBufferMemory
-from langchain.prompts import MessagesPlaceholder
-from langchain.chat_models import ChatOpenAI
+import langchain
+from langchain import LLMMathChain
+from langchain.agents import Tool, initialize_agent, load_tools, OpenAIFunctionsAgent
 from langchain.agents.agent import AgentExecutor
 from langchain.agents.agent_types import AgentType
-from langchain.agents import initialize_agent, Tool, load_tools
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.schema import SystemMessage, AIMessage, HumanMessage
-from langchain.schema import BaseMessage, BaseChatMessageHistory
-from libs.CustomChatMessageHistory import CustomChatMessageHistory
-from langchain import LLMMathChain
 from langchain.callbacks import get_openai_callback
-from langchain.schema import messages_from_dict, messages_to_dict
+from langchain.chains.conversation.memory import (
+    ConversationBufferMemory, ConversationBufferWindowMemory,
+    ConversationSummaryBufferMemory)
+from langchain.chat_models import ChatOpenAI
+from langchain.memory import ConversationTokenBufferMemory
+from langchain.prompts import PromptTemplate,MessagesPlaceholder
+from langchain.prompts.chat import (AIMessagePromptTemplate,
+                                    ChatPromptTemplate,
+                                    HumanMessagePromptTemplate,
+                                    SystemMessagePromptTemplate)
+from langchain.schema import (OutputParserException, AIMessage, BaseChatMessageHistory, BaseMessage,
+                              HumanMessage, SystemMessage, messages_from_dict,
+                              messages_to_dict)
+from libs.CustomChatMessageHistory import CustomChatMessageHistory
+from tools.ChatNewsTool import NewsData, NewsRepo
+from tools.task_tool import AITask, AITaskRepo, AITaskTool, TaskCmd
 from tools.webSearchTool import WebSearchTool
-from tools.ChatNewsTool import NewsRepo, NewsData
-from tools.task_tool import TaskCmd, AITask, AITaskRepo, AITaskTool
+
+from libs.bot_model import AbstractBot
+from libs.logging_callback_handler import LoggerCallbackHdr
+from libs.extends_memory import ExtConversationSummaryBufferMemory
+
+langchain.debug=False
 
 def formatted_datetime():
     # オペレーティングシステムのタイムゾーンを取得
@@ -67,9 +78,26 @@ class BotRepository:
                 agent = BotAgent(userid)
                 self._map[userid] = agent
                 agent.load(self.repo_path)
+                agent.logger.setLevel(logging.DEBUG)
+            self.configure_agent(agent)
             return agent
         finally:
             self._lock.release()
+
+    def configure_agent(self, agent ):
+                # system_prompt = """
+        #     You are an AI chatbot with speech recognition and text-to-speech.
+        #     Response to user in short sentences. Your sentence must be 50 characters or less.
+        #     """
+        # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
+        # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
+        # self.personality = Personality()
+        # self.personality.main_prompt = "You are not AI, You are a stray cat. You complain and make fun of people on a whim. Talk in casually and lethargic and remarks short."
+        # self.personality.main_prompt = "You are not an AI, you are a stray cat. Stray cats don't help humans. Cats make fun of humans for their strange behavior. Generate and talk to humans about the lives and events of stray cats. Please speak casually and roughly. Please speak within 30 words."
+        # self.personality.main_prompt = "You are a stray cat. Reply sarcasm or jokes by casual short comments. Add \"にゃ\" to the end of a word"
+        # self.personality.event_prompt = "Minor events of the day (20 words or less):\n\nWhat stray cats want to ask users (20 words or less):\n\n"
+        agent.main_prompt = "You are a stray cat. Reply sarcasm or jokes by casual short comments. Add \"にゃ\" to the end of a word. Current date is {current_datetime}"
+
 
     def call_timer(self):
         now = int(time.time()*1000)
@@ -111,71 +139,142 @@ class Personality:
             "event_prompt": self.event_prompt,
             #"post_process": self.post_process
         }
-TERMLIST=[ 
-        ["ありません", "ないニャ"],["ください","にゃ"],
-        ["できません", "できないニャ"],
-        ["できます", "できるニャ"],
-        ["ありません", "ないニャ"],["ありますか","あるニャ"],
-        ["ですか", "ニャ"],
-        ["ました","したニャ"],["ましたね","したニャ"],
-        ["したよね","したニャ"],["ません","ないニャ"],
-        ["ですね","だニャ"],
-        ["ですよ","だニャ"],
-        ["です","だニャ"],["いたしますよ","するニャ"],["いたします","するニャ"],
-        ["たよ","たニャ"],["たよ","たニャ"],
-        ["たよね","たニャ"],["たよね","たニャ"],
-        ["んだ","ニャ"],
-        ["けさ","けニャ"],
-        ["な","ニャ"],
-        ["ましょう","ますニャ"]
 
-     ]
-REPLIST=[ 
-        ["ごめんなさい、", "ごめんニャ、"],
-        ["ただし、", "でもニャ、"],
-        ["でも、", "でもニャ、"],
-        ["ので、", "ニャ、"],
-        ["ですから、", "だからニャ、"],
-        ["にゃーん、",""]
-     ]
+class ToneV:
 
-def default_post_process( mesgs, origs):
-    result = []
-    for i,m in enumerate(mesgs):
-        for j,e, in enumerate(TERMLIST):
-            e0=e[0]
-            e1=e[1]
-            if m.endswith(e0):
-                m = m[:-len(e0)] + e1
-            e0a=e0+"。"
-            e1a=e1+"。"
-            if m.endswith(e0a):
-                m = m[:-len(e0a)] + e1a
-            e0a=e0+"？"
-            e1a=e1+"？"
-            if m.endswith(e0a):
-                m = m[:-len(e0a)] + e1a
-            e0a=e0+"！"
-            e1a=e1+"！"
-            if m.endswith(e0a):
-                m = m[:-len(e0a)] + e1a
-        for e in REPLIST:
-            m = m.replace(e[0],e[1])
-        result.append(m)
-    return result
+    _IGNORE_WORDS = (
+        "お手伝いできますか",
+        "お手伝いができますか",
+        "お手伝いがあれば教えてください",
+        "お手伝いできることがあれば教えてください",
+        "お手伝いできることはありますか",
+        "お手伝いいたします",
+        "お手伝いできることがあればお知らせください",
+        "お手伝いできるかもしれません",
+        "お手伝いできるかと思います",
 
-class BotAgent:
-    def __init__(self, userid):
+        "お知らせください",
+        "お聞きください",
+        "お聞かせください",
+        "お話しください",
+        "困っているのか教えてください",
+        "教えていただけますか",
+        "お話を教えてください",
+
+        "お話しましょうか","お話しすることはありますか？",
+
+        "質問があればどうぞ","何か質問がありますか"
+
+        "どんなことでも結構ですよ",
+
+        "頑張ってください", "応援しています",
+        "何か特別な予定はありますか",
+        "お申し付けください",
+        "伝いが必要な場合はお知らせください",
+        "遠慮なくお知らせください",
+        "サポートいたします",
+        "良い一日をお過ごしください",
+
+        "サイトで確認してください",
+        "願っています",
+        "計画はありますか",
+
+        "話したいことある",
+        "助けが必要か"
+        )
+    _IGNORE_TUPLE = tuple( set(_IGNORE_WORDS) )
+    _pattern = re.compile(r"[、？！]")
+    _split_re = re.compile(r"([。！])")
+
+    @staticmethod
+    def _is_ignore_word(message:str) -> str:
+        buf = ToneV._pattern.sub("", message.strip("  。\n"))
+        return buf.endswith(ToneV._IGNORE_TUPLE)
+
+    @staticmethod
+    def tone_convert(message: str, post_process : typing.Callable = None) -> str:
+        # lines0 = re.split(r"(?<=[\n])",message0)
+        # message = lines0[0]
+        lines = re.split(r"(?<=[。！\n])",message)
+        results = [line for line in lines if not ToneV._is_ignore_word(line)]
+        if post_process is not None:
+            results = post_process(results,lines)
+        return "".join(results) if results else "".join(lines)
+
+    TERMLIST=[ 
+            ["ありません", "ないニャ"],["ください","にゃ"],
+            ["できません", "できないニャ"],
+            ["できます", "できるニャ"],
+            ["ありません", "ないニャ"],["ありますか","あるニャ"],
+            ["ですか", "ニャ"],
+            ["ました","したニャ"],["ましたね","したニャ"],
+            ["したよね","したニャ"],["ません","ないニャ"],
+            ["ですね","だニャ"],
+            ["ですよ","だニャ"],
+            ["です","だニャ"],["いたしますよ","するニャ"],["いたします","するニャ"],
+            ["たよ","たニャ"],["たよ","たニャ"],
+            ["たよね","たニャ"],["たよね","たニャ"],
+            ["んだ","ニャ"],
+            ["けさ","けニャ"],
+            ["な","ニャ"],
+            ["ましょう","ますニャ"]
+#天ぷらの作り方について調べてみましたが、情報が見つかりませんでしたにゃ。他の質問に答えることはできるかもしれません。何か他の質問はありますか？
+        ]
+    REPLIST=[ 
+            ["ごめんなさい、", "ごめんニャ、"],
+            ["ただし、", "でもニャ、"],
+            ["でも、", "でもニャ、"],
+            ["ので、", "ニャ、"],
+            ["ですから、", "だからニャ、"],
+            ["にゃーん、",""]
+        ]
+    @staticmethod
+    def default_post_process( mesgs, origs):
+        result = []
+        for i,m in enumerate(mesgs):
+            for j,e, in enumerate(ToneV.TERMLIST):
+                e0=e[0]
+                e1=e[1]
+                if m.endswith(e0):
+                    m = m[:-len(e0)] + e1
+                e0a=e0+"。"
+                e1a=e1+"。"
+                if m.endswith(e0a):
+                    m = m[:-len(e0a)] + e1a
+                e0a=e0+"？"
+                e1a=e1+"？"
+                if m.endswith(e0a):
+                    m = m[:-len(e0a)] + e1a
+                e0a=e0+"！"
+                e1a=e1+"！"
+                if m.endswith(e0a):
+                    m = m[:-len(e0a)] + e1a
+            for e in ToneV.REPLIST:
+                m = m.replace(e[0],e[1])
+            result.append(m)
+        return result
+
+
+class BotAgent(AbstractBot):
+    def __init__(self, userid:str):
+        super().__init__( user_id = userid )
         self.userid=userid
         self.lang_out='Japanese'
         self.current_location = 'Japan'
         self.openai_model='gpt-3.5-turbo'
         #self.openai_model='gpt-4'
 
-        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model)
+        self.name = ''
+        self.main_prompt = ""
+        self.event_prompt = ""
+        # callback
+        self.callback_list = [ LoggerCallbackHdr(self) ]
+
         # ツールの準備
-        llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False)
+        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model)
+        llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False,callbacks=self.callback_list)
         web_tool = WebSearchTool()
+        self.task_repo: AITaskRepo = None
         self.task_tool = AITaskTool()
         self.task_tool.bot_id = self.userid
         self.tools=[]
@@ -189,36 +288,14 @@ class BotAgent:
                 description="useful for when you need to answer questions about math"
             )
         ]
-        # systemメッセージプロンプトテンプレートの準備
-        # system_prompt = """
-        #     You are an AI chatbot with speech recognition and text-to-speech.
-        #     Response to user in short sentences. Your sentence must be 50 characters or less.
-        #     """
-        # self.system_prompt = "You are a chatbot that provides users with fun conversations. It infers user interests from conversations and provides relevant information."
-        # self.system_prompt = "貴方は気高い野良猫です。猫の目線で人間に文句を言ったり、気まぐれにからかいます。セリフは短く。語尾にニャ。"
-        self.personality = Personality()
-        self.personality.main_prompt = "You are not AI, You are a stray cat. You complain and make fun of people on a whim. Talk in casually and lethargic and remarks short."
-        self.personality.main_prompt = "You are not an AI, you are a stray cat. Stray cats don't help humans. Cats make fun of humans for their strange behavior. Generate and talk to humans about the lives and events of stray cats. Please speak casually and roughly. Please speak within 30 words."
-        self.personality.main_prompt = "You are a stray cat. Reply sarcasm or jokes by casual short comments. Add \"にゃ\" to the end of a word"
-        self.personality.event_prompt = "Minor events of the day (20 words or less):\n\nWhat stray cats want to ask users (20 words or less):\n\n"
-        self.personality.post_process = default_post_process
-        self.main_prompt_message = SystemMessage(
-            content=self.personality.main_prompt
-        )
+        for t in self.tools:
+            t.callbacks = self.callback_list
         # メモリの準備
-        self.agent_kwargs = {
-            "system_message": self.main_prompt_message,
-            "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory_hanaya")],
-        }
-        #func_memory = ConversationBufferWindowMemory( k=3, memory_key="memory",return_messages=True)
         mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model)
-        self.agent_memory = ConversationSummaryBufferMemory(llm=mem_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True)
-        self.memory : CustomChatMessageHistory = CustomChatMessageHistory()
-        self.agent_memory.chat_memory : BaseChatMessageHistory=self.memory #Field(default_factory=ChatMessageHistory)
-        self.name = ''
+        self.agent_memory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
+
         self.anser_list = []
         self.last_call = int(time.time())
-        self.task_repo : AITaskRepo = None
         self.news_repo : NewsRepo= None
 
     def _file_path(self,path):
@@ -248,15 +325,9 @@ class BotAgent:
         self.userid = json_data.get("userid",None)
         self.name = json_data.get("name",None)
         self.last_call = json_data.get("last_call",0)
-        # 個性
-        personal_dict:dict = json_data.get('personality',None)
-        if personal_dict:
-            pp = Personality()
-            pp.post_process = self.personality.post_process
-            pp.from_dict(personal_dict)
         # 記憶
         self.agent_memory.moving_summary_buffer = ""
-        self.memory.clear()   
+        self.agent_memory.chat_memory.clear()   
         mem_json:dict = json_data.get('memory',None)
         if mem_json:
             self.agent_memory.moving_summary_buffer = mem_json.get("summary","")
@@ -264,7 +335,7 @@ class BotAgent:
             if mesgs_json and len(mesgs_json)>0:
                 megs = messages_from_dict(mesgs_json)
                 for m in megs:
-                    self.memory.add_message(m)
+                    self.agent_memory.chat_memory.add_message(m)
 
     def to_dict(self) -> dict:
         json_data = {
@@ -272,25 +343,19 @@ class BotAgent:
             "name": self.name,
             "last_call": self.last_call
         }
-        if self.personality:
-            json_data['personality'] = self.personality.to_dict()
         mem:dict = {}
         if self.agent_memory.moving_summary_buffer:
             mem['summary'] = self.agent_memory.moving_summary_buffer
-        if self.memory:
-            msgs = self.memory.messages
+        if self.agent_memory.chat_memory:
+            msgs = self.agent_memory.chat_memory.messages
             if msgs and len(msgs)>0:
                 mem['messages'] = messages_to_dict(msgs)
         if len(mem)>0:
             json_data['memory']=mem
         return json_data
 
-    def get_personality(self) -> Personality:
-        return self.personality
-    
-    def set_personality(self, personality:Personality) -> None:
-        self.personality = personality
-        self.main_prompt_message.content = personality.main_prompt
+    def tone_convert(self, message: str) -> str:
+        return ToneV.tone_convert(message)
 
     def ago(self, sec: int ) -> str:
         min = int(sec/60)
@@ -310,30 +375,45 @@ class BotAgent:
         yers = int(month/12)
         return f"{hour} years have passed."
         
-    def llm_run(self,query):
+    def build_main_prompt(self) -> str:
+        # メインプロンプト構築
+        prompt = self.main_prompt if self.main_prompt is not None else ""
+        if "{bot_name}" in prompt:
+            if self.name is None or len(self.name)==0:
+                prompt = prompt.replace("{bot_name}","none")
+            else:
+                prompt = prompt.replace("{bot_name}",self.name)
+        if "{current_datetime}" in prompt:
+            # 現在の時刻を取得
+            formatted_time = formatted_datetime()
+            prompt = prompt.replace("{current_datetime}",formatted_time)
+        if "{current_location}" in prompt:
+            if self.current_location is None or len(self.current_location)==0:
+                prompt = prompt.replace("{current_location}","Japan")
+            else:
+                prompt = prompt.replace("{current_location}",self.current_location)
+        prompt += "\nYou speak a short line"
+        if self.lang_out is None or len(self.lang_out)==0:
+            prompt += "."
+        else:
+            prompt += f' in {self.lang_out}.'
+        return prompt
+
+    def _run_impl(self,talk_id:int, query:str):
         agent_chain = None
         agent_llm = None
         try:
-            self.task_tool.task_repo = self.task_repo
-
-            print(f"[LLM] you text:{query}")
-            agent_llm = ChatOpenAI(verbose=True, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
-            # 現在の時刻を取得
-            formatted_time = formatted_datetime()
-            # メインプロンプト構築
-            mp = ""
-            if self.personality:
-                mp = f"Your name is {self.personality.name}." if self.personality.name else ""
-                mp += self.personality.main_prompt if self.personality.main_prompt else ""
-                self.memory.post_process = self.personality.post_process
-            mp += f"\ncurrent time:{formatted_time}" if formatted_time else ""
-            mp += f"\ncurrent location:{self.current_location}" if self.current_location else ""
-            mp += f'\nTalk in {self.lang_out}.' if self.lang_out else ""
-            mp += "\nYou speak a short line."
+            self.task_tool.task_repo = self.task_repo # 実行前に設定されるはず
+            self.log_info(f"[LLM] you text:{query}")
+                
+            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
             # メインプロンプト設定
-            self.main_prompt_message.content = mp
             # ポスト処理
             # prompt
+            # systemメッセージプロンプトテンプレートの準備
+            main_prompt_message = SystemMessage(
+                content=self.build_main_prompt()
+            )
                 
             # 記憶の整理
             now = int(time.time())
@@ -347,7 +427,7 @@ class BotAgent:
                         self.agent_memory.max_token_limit = 10
                         self.agent_memory.prune()
                     except Exception as ex:
-                        print(ex)
+                        self.log_error("",ex)
                     finally:
                         self.agent_memory.max_token_limit = before
                     event_text.append(ago_mesg)
@@ -357,34 +437,52 @@ class BotAgent:
                     if news:
                         event_text.append('Use this news in your comment.\n# URL:'+news.link+"\n# Article:" + news.snippet+"\n\nTell to Human abount this news.")
                 # self.event_promptで出来事を生成
-                elif self.personality.event_prompt:
-                    text = agent_llm.predict( self.personality.main_prompt + "\n" + self.personality.event_prompt, stop=["\n"])
+                elif self.event_prompt is not None and len(self.event_prompt)>0:
+                    text = agent_llm.predict( main_prompt_message.content + "\n" + self.event_prompt, stop=["\n"])
                     if text:
                         event_text.append(text)
                 if len(event_text)>0:
-                    self.agent_memory.chat_memory.add_message( SystemMessage(content="\n".join(event_text)) )
+                    self.agent_memory.set_post_prompt( "\n".join(event_text) )
             self.last_call = now
             # 回答の制限
             if random.randint(0,5)==0:
                 stp=["。","\n"]
                 llm_model_kwargs = { "max_tokens": 500, "stop": stp }
                 agent_llm.model_kwargs = llm_model_kwargs
-            # エージェントの準備e
+            agent_kwargs = {
+                "system_message": main_prompt_message,
+                "extra_prompt_messages": [MessagesPlaceholder(variable_name="memory_hanaya")],
+            }
+            # エージェントの準備
             agent_chain : AgentExecutor = initialize_agent(
                 self.tools, 
                 agent_llm, 
                 agent=AgentType.OPENAI_FUNCTIONS,
-                verbose=False, 
+                verbose=False, callbacks=self.callback_list,
                 memory=self.agent_memory,
-                agent_kwargs=self.agent_kwargs, 
-                handle_parsing_errors=_handle_error
+                agent_kwargs=agent_kwargs, 
+                handle_parsing_errors=False
             )
             import langchain
-            langchain.debug=True
-            res_text = agent_chain.run(input=query)
-            print(f"[LLM] GPT text:{res_text}")
-            anser = self.agent_memory.chat_memory.messages[-1].content
-            print(f"[LLM] GPT last.mem:{anser}")
+            langchain.debug=False
+            save_temperature = agent_llm.temperature
+            try:
+                for t in range(0,1):
+                    try:
+                        res_text = agent_chain.run(input=query)
+                        break
+                    except OutputParserException as ex:
+                        self.log_error("",ex)
+                        res_text = f"{ex}"
+                        self._ai_message(talk_id,res_text)
+                        agent_llm.temperature = 0
+            finally:
+                agent_llm.temperature = save_temperature
+
+            anser = res_text
+            if len(self.agent_memory.chat_memory.messages)>0:
+                anser = self.agent_memory.chat_memory.messages[-1].content
+            print(f"[LLM] GPT anser:{anser}")
             return anser
             # self.anser_list = re.split(r"(?<=[。\n])",anser)
             # return self.anser_list.pop(0) if self.anser_list else ""
@@ -397,7 +495,7 @@ class BotAgent:
         except openai.error.AuthenticationError as ex:
             return "openai.error.AuthenticationError"
         except Exception as ex:
-            print(ex)
+            self.log_error("",ex)
             return f"InternalError({ex})"
         finally:
             if agent_chain:
@@ -410,13 +508,27 @@ class BotAgent:
             print( f"{m}")
 
 def main():
+    langchain.debug=False
     import logging
-    logger = logging.getLogger("openai")
-    logger.setLevel( logging.DEBUG )
-    fh = logging.FileHandler("logs/openai-debug.log")
-    logger.addHandler(fh)
+    # configure root logger
+    log_date_format = '%Y-%m-%d %H:%M:%S'
+    log_format = '%(asctime)s [%(levelname)s] %(name)s %(message)s'
+    log_formatter = logging.Formatter(log_format, log_date_format)
+    root_logger : logging.Logger = logging.getLogger()
+    console_hdr = logging.StreamHandler()
+    console_hdr.setLevel( logging.DEBUG )
+    console_hdr.setFormatter(log_formatter)
+    root_logger.addHandler( console_hdr )
+
+    openai_logger = logging.getLogger("openai")
+    openai_logger.setLevel( logging.DEBUG )
+    openai_logger.propagate = False
+    openai_fh = TimedRotatingFileHandler('logs/openai-debug_log',when='midnight',backupCount=7,interval=1,encoding='utf-8')
+    openai_fh.setFormatter(log_formatter)
+    openai_logger.addHandler(openai_fh)
 
     agent_repo_path = "agents"
+    task_repo = AITaskRepo()
     repo : BotRepository = BotRepository(agent_repo_path)
     userid='b000'
     agentB1 : BotAgent = repo.get_agent(userid)
@@ -441,10 +553,10 @@ def main():
     if agent != agent2:
         print("ERROR: 001")
         return
-
+    agent2.task_repo = task_repo
     response = agent2.llm_run('今日はなにしてたの？')
     print(f"[TEST.RESULT]{response}")
-    response = agent2.llm_run('天ぷらの作り方おしえて')
+    response = agent2.llm_run('天ぷらの作り方を調べておしえて')
     print(f"[TEST.RESULT]{response}")
     agent2.last_call = int(time.time()) - 7*24*3600
 
@@ -459,6 +571,7 @@ def main():
         print("ERROR: 002")
         return
 
+    agent3.task_repo = task_repo
     response = agent3.llm_run('こんにちは、何日ぶりかな')
     print(f"[TEST.RESULT]{response}")
     response = agent3.llm_run('何か出来事がありましたか？')

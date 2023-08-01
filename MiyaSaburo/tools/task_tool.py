@@ -127,6 +127,9 @@ class AITaskTool(BaseTool):
                     return "Cancelled " + date_time
                 elif cmd == TaskCmd.get:
                     return "Cancelled " + date_time
+            else:
+                logger.error("task_repo is null")
+                return "out of service."
         except Exception as ex:
             logger.exception("")
         return "System Error"

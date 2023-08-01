@@ -1,12 +1,15 @@
 from typing import Any, Dict, List, Optional, Sequence, Union
+from langchain.chains.llm import LLMChain
 from langchain.memory import ConversationBufferMemory,ConversationSummaryBufferMemory,CombinedMemory
-from langchain.schema.messages import BaseMessage
+from langchain.schema.messages import BaseMessage, get_buffer_string
 from langchain.schema.messages import SystemMessage, AIMessage, HumanMessage
 from libs.bot_model import AbstractBot
+from langchain.callbacks.base import BaseCallbackHandler
 
 class ExtConversationSummaryBufferMemory(ConversationSummaryBufferMemory):
 
     Bot : AbstractBot
+    callbacks: list[BaseCallbackHandler] = None
     _extend_data = {}
 
     def set_post_prompt(self, message:str):
@@ -19,6 +22,15 @@ class ExtConversationSummaryBufferMemory(ConversationSummaryBufferMemory):
         pruned_memory = self.chat_memory.messages[:]
         self.moving_summary_buffer = self.predict_new_summary( pruned_memory, self.moving_summary_buffer )
         self.chat_memory.messages = []
+
+    def predict_new_summary( self, messages: List[BaseMessage], existing_summary: str ) -> str:
+        new_lines = get_buffer_string(
+            messages,
+            human_prefix=self.human_prefix,
+            ai_prefix=self.ai_prefix,
+        )
+        chain = LLMChain(llm=self.llm, prompt=self.prompt,callbacks=self.callbacks,tags=["summary"])
+        return chain.predict(summary=existing_summary, new_lines=new_lines)
 
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         ret = super().load_memory_variables(inputs)

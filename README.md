@@ -20,7 +20,7 @@ $ python3 -m venv .Bot
 pythonモジュールをインストールして下さい
 $ source .Bot/bin/active
 $ pip inlstall -U pip
-$ pip install flask line-bot-sdk langchain openai lxml matplotlib pandas scipy scikit-learn
+$ pip install flask line-bot-sdk langchain openai tiktoken lxml matplotlib pandas scipy scikit-learn
 
 サーバーにコピーして下さい
 $ git clone https://github.com/route250/MiyaSaburo.git

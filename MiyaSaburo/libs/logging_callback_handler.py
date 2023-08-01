@@ -31,14 +31,14 @@ class LoggerCallbackHdr(BaseCallbackHandler):
     def on_chain_error(self,error: Union[Exception, KeyboardInterrupt],*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
         self._bot.log_error(f"on_chain_error",error)
     def on_agent_action(self,action: AgentAction,*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
-        self._bot.log_info(f"on_agent_action {self._bot.dumps(action.log)}")
+        self._bot.log_info(f"on_agent_action {self._bot.dumps(action.log,max_length=8192)}")
     def on_agent_finish(self,finish: AgentFinish,*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
-        self._bot.log_info(f"on_agent_finish {self._bot.dumps(finish.log)}")
+        self._bot.log_info(f"on_agent_finish {self._bot.dumps(finish.log,max_length=8192)}")
     #------------------------------------------------------------
     # ToolManagerMixin:
     #------------------------------------------------------------
     def on_tool_end(self,output: str,*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
-        self._bot.log_info(f"on_agent_finish ")
+        self._bot.log_info(f"on_tool_end ")
     def on_tool_error(self,error: Union[Exception, KeyboardInterrupt],*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
         self._bot.log_error(f"on_tool_error",error)
     #------------------------------------------------------------
