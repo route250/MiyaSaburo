@@ -66,8 +66,8 @@ class BotRepository:
             self._lock.acquire()
             agent:BotAgent = self._map.get(userid)
             if agent is None:
-                agent.logger.setLevel(logging.DEBUG)
                 agent = BotAgent(userid)
+                agent.logger.setLevel(logging.DEBUG)
                 self._map[userid] = agent
                 agent.load(self.repo_path)
             self.load_time_sec = int(time.time())
