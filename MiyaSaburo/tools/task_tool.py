@@ -34,86 +34,90 @@ class AITaskRepo:
         self._task_list : list[AITask] = list[AITask]()
         self._last_call = 0
         self.task_queue = queue.Queue()
+        self._cv = threading.Condition()
 
     def logdump(self):
-        if logger.isEnabledFor(logging.DEBUG):
+        with self._cv:
             dump = "\n".join([ f"{t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" for t in self._task_list])
-            logger.debug(dump)
+            logger.debug( f"task dump\n{dump}")
 
     def call( self, bot_id:str, cmd : TaskCmd, date_time : str, purpose: str = None, action: str = None ):
-        try:
-            result = None
-            if cmd == TaskCmd.add:
-                task = AITask( bot_id, date_time, purpose, action )
-                if task.time_sec>10:
-                    self._task_list.append(task)
-                    result = "Reserved at "+date_time
-                else:
-                    result = f"Invalid date time \"{date_time}\""
-            elif cmd == TaskCmd.cancel:
-                new_list = []
-                for t in self._task_list:
-                    if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
-                        new_list.append(t)
-                removed = len(self._task_list)-len(new_list)
-                if removed>0:
-                    self._task_list = new_list
-                    result = "Cancelled from " + date_time
-                else:
-                    result = "Not found task in " + date_time
-            elif cmd == TaskCmd.get:
-                if len(self._task_list)>0:
-                    result = " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
-                else:
-                    result = "no tasks."
-            logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
-        except:
-            logger.exception(f"eror in task repo call {bot_id} {cmd} {date_time} {purpose} {action}")
-            result = None
-        self.logdump()
-        return result
+        with self._cv:
+            try:
+                result = None
+                if cmd == TaskCmd.add:
+                    task = AITask( bot_id, date_time, purpose, action )
+                    if task.time_sec>10:
+                        self._task_list.append(task)
+                        result = "Reserved at "+date_time
+                    else:
+                        result = f"Invalid date time \"{date_time}\""
+                elif cmd == TaskCmd.cancel:
+                    new_list = []
+                    for t in self._task_list:
+                        if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
+                            new_list.append(t)
+                    removed = len(self._task_list)-len(new_list)
+                    if removed>0:
+                        self._task_list = new_list
+                        result = "Cancelled from " + date_time
+                    else:
+                        result = "Not found task in " + date_time
+                elif cmd == TaskCmd.get:
+                    if len(self._task_list)>0:
+                        result = " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
+                    else:
+                        result = "no tasks."
+                logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
+            except:
+                logger.exception(f"eror in task repo call {bot_id} {cmd} {date_time} {purpose} {action}")
+                result = None
+            self.logdump()
+            return result
 
     def timer_event(self) -> list[AITask]:
-        try:
-            now_sec = int( time.time() )
-            task_list = []
-            submit_list = []
-            for t in self._task_list:
-                if t.time_sec>now_sec:
-                    task_list.append(t)
-                if t.time_sec>10:
-                    submit_list.append(t)
-                    logger.debug( f"timver_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
+        with self._cv:
+            try:
+                now_sec = int( time.time() )
+                task_list = []
+                submit_list = []
+                for t in self._task_list:
+                    if t.time_sec>now_sec:
+                        task_list.append(t)
+                    if t.time_sec>10:
+                        submit_list.append(t)
+                        logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
 
-            self._task_list = task_list
-            if len(submit_list)>0:
-                self.logdump()
-            return submit_list
-        except:
-            logger.exception(f"eror in task repo timer_event")
-        return []
+                self._task_list = task_list
+                if len(submit_list)>0:
+                    self.logdump()
+                return submit_list
+            except:
+                logger.exception(f"eror in task repo timer_event")
+            return []
 
     def get_task(self,ai_id:str) -> AITask:
-        try:
-            size = len(self._task_list)
-            if size==0:
-                return None
-            now_sec = int( time.time() )
-            idx = 0
-            while idx<size:
-                task = self._task_list[idx]
-                if task.bot_id == ai_id and task.time_sec <= now_sec:
-                    break
-                idx+=1
-            if idx>=size:
-                return None
-            submit = self._task_list[idx]
-            del self._task_list[idx]
-            self.logdump()
-            return submit
-        except:
-            logger.exception(f"eror in task repo get_task {ai_id}")
-        return None
+        with self._cv:
+            try:
+                size = len(self._task_list)
+                if size==0:
+                    return None
+                now_sec = int( time.time() )
+                idx = 0
+                while idx<size:
+                    task = self._task_list[idx]
+                    if task.bot_id == ai_id and task.time_sec <= now_sec:
+                        break
+                    idx+=1
+                if idx>=size:
+                    return None
+                submit = self._task_list[idx]
+                del self._task_list[idx]
+                self.logdump()
+                return submit
+            except:
+                logger.exception(f"eror in task repo get_task {ai_id}")
+            return None
 
 # Toolの入力パラメータを定義するモデル
 class AITaskInput(BaseModel):
@@ -170,16 +174,3 @@ class AITaskTool(BaseTool):
         raise NotImplementedError("custom_search does not support async")
     
 
-def main():
-
-    sec1 = int( time.time() )
-    dt1 = Utils.from_unix_timestamp_seconds(sec1)
-    sec2 = Utils.to_unix_timestamp_seconds(dt1)
-    dt2 = Utils.from_unix_timestamp_seconds(sec2)
-    print(sec1)
-    print(dt1)
-    print(sec2)
-    print(dt2)
-
-if __name__ == '__main__':
-    main()

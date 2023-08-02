@@ -40,6 +40,7 @@ from libs.logging_callback_handler import LoggerCallbackHdr
 from libs.extends_memory import ExtConversationSummaryBufferMemory
 
 langchain.debug=False
+logger = logging.getLogger('BotAgent')
 
 class BotTimerTask:
     def __init__(self,userid:str,time:int,callback,title=None):
@@ -51,7 +52,7 @@ class BotTimerTask:
 class BotRepository:
     def __init__(self, path):
         self._lock = threading.Lock()
-        self._last_timer = int(time.time()*1000)
+        self._last_timer_sec = int(time.time()*1000)
         self._map :dict = dict()
         self.repo_path = path
         self.unload_min = 10
@@ -65,10 +66,11 @@ class BotRepository:
             self._lock.acquire()
             agent:BotAgent = self._map.get(userid)
             if agent is None:
+                agent.logger.setLevel(logging.DEBUG)
                 agent = BotAgent(userid)
                 self._map[userid] = agent
                 agent.load(self.repo_path)
-                agent.logger.setLevel(logging.DEBUG)
+            self.load_time_sec = int(time.time())
             self.configure_agent(agent)
             return agent
         finally:
@@ -90,16 +92,16 @@ class BotRepository:
 
 
     def call_timer(self):
-        now = int(time.time()*1000)
-        if (now-self._last_timer)<10000:
+        now_sec = int(time.time())
+        if (now_sec-self._last_timer_sec)<10:
             return
-        self._last_timer = now
+        self._last_timer_sec = now_sec
         try:
             self._lock.acquire()
-            min = self.unload_min * 60 * 1000
+            min = self.unload_min * 60
             for userid in list(self._map.keys()):
                 agent:BotAgent = self._map.get(userid)
-                if (now-agent.last_call)>min:
+                if (now_sec-agent.last_call_sec)>min and (now_sec-agent.load_time_sec)>min:
                     agent.unload(self.repo_path)
                     del self._map[userid]
                     break
@@ -246,6 +248,8 @@ class ToneV:
 
 
 class BotAgent(AbstractBot):
+    TIMEOUT:int = 120
+    REQUEST_TIMEOUT=30
     def __init__(self, userid:str):
         super().__init__( user_id = userid )
         self.userid=userid
@@ -261,7 +265,7 @@ class BotAgent(AbstractBot):
         self.callback_list = [ LoggerCallbackHdr(self) ]
 
         # ツールの準備
-        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model, timeout=30, request_timeout=10)
+        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model, timeout=BotAgent.TIMEOUT, timeout=BotAgent.REQUEST_TIMEOUT)
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False,callbacks=self.callback_list)
         web_tool = WebSearchTool()
         self.task_repo: AITaskRepo = None
@@ -281,11 +285,12 @@ class BotAgent(AbstractBot):
         for t in self.tools:
             t.callbacks = self.callback_list
         # メモリの準備
-        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, timeout=30, request_timeout=10 )
+        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, timeout=BotAgent.TIMEOUT, timeout=BotAgent.REQUEST_TIMEOUT )
         self.agent_memory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=800, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
 
         self.anser_list = []
-        self.last_call = int(time.time())
+        self.load_time_sec = int(time.time())
+        self.last_call_sec = self.load_time_sec
         self.news_repo : NewsRepo= None
 
     def _file_path(self,path):
@@ -297,6 +302,7 @@ class BotAgent(AbstractBot):
         json_file = self._file_path(path)
         if not os.path.exists(json_file):
             return
+        logger.info(f"load from {json_file}")
         with open(json_file,"r") as fp:
             json_data = json.load(fp)
         self.from_dict(json_data)
@@ -304,6 +310,7 @@ class BotAgent(AbstractBot):
     def unload(self,path):
         if not self.userid or not path:
             return
+        logger.info(f"unload to {json_file}")
         os.makedirs(path,exist_ok=True)
         json_data = self.to_dict()
         json_file = self._file_path(path)
@@ -314,7 +321,7 @@ class BotAgent(AbstractBot):
         # 基本情報
         self.userid = json_data.get("userid",None)
         self.name = json_data.get("name",None)
-        self.last_call = json_data.get("last_call",0)
+        self.last_call_sec = json_data.get("last_call",0)
         # 記憶
         self.agent_memory.moving_summary_buffer = ""
         self.agent_memory.chat_memory.clear()   
@@ -331,7 +338,7 @@ class BotAgent(AbstractBot):
         json_data = {
             "userid": self.userid,
             "name": self.name,
-            "last_call": self.last_call
+            "last_call": self.last_call_sec
         }
         mem:dict = {}
         if self.agent_memory.moving_summary_buffer:
@@ -396,7 +403,7 @@ class BotAgent(AbstractBot):
             self.task_tool.task_repo = self.task_repo # 実行前に設定されるはず
             self.log_info(f"[LLM] you text:{query}")
                 
-            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=30, request_timeout=10 )
+            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=BotAgent.TIMEOUT, timeout=BotAgent.REQUEST_TIMEOUT )
             # メインプロンプト設定
             # ポスト処理
             # prompt
@@ -407,7 +414,7 @@ class BotAgent(AbstractBot):
                 
             # 記憶の整理
             now = int(time.time())
-            ago_mesg = self.ago( now-self.last_call)
+            ago_mesg = self.ago( now-self.last_call_sec)
             if ago_mesg:
                 # 記憶を要約
                 event_text = []
@@ -433,7 +440,7 @@ class BotAgent(AbstractBot):
                         event_text.append(text)
                 if len(event_text)>0:
                     self.agent_memory.set_post_prompt( "\n".join(event_text) )
-            self.last_call = now
+            self.last_call_sec = now
             # 回答の制限
             if random.randint(0,5)==0:
                 stp=["。","\n"]
@@ -530,7 +537,7 @@ def main():
         print("ERROR x")
         return
     repo.unload_min=0
-    repo._last_timer = 0
+    repo._last_timer_sec = 0
     repo.call_timer()
     repo.unload_min = 10
     agentB3 : BotAgent = repo.get_agent(userid)
@@ -551,11 +558,11 @@ def main():
     print(f"[TEST.RESULT]{response}")
     response = agent2.llm_run('天ぷらの作り方を調べておしえて')
     print(f"[TEST.RESULT]{response}")
-    agent2.last_call = int(time.time()) - 7*24*3600
+    agent2.last_call_sec = int(time.time()) - 7*24*3600
 
     repo.unload_min=0
     while repo.size()>0:
-        repo._last_timer = 0
+        repo._last_timer_sec = 0
         repo.call_timer()
     repo.unload_min = 10
 
