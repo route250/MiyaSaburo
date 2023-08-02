@@ -40,8 +40,10 @@ log_date_format = '%Y-%m-%d %H:%M:%S'
 log_format = '%(asctime)s [%(levelname)s] %(name)s %(message)s'
 log_formatter = logging.Formatter(log_format, log_date_format)
 root_logger : logging.Logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
 root_fh = TimedRotatingFileHandler('logs/line-bot_log',when='midnight',backupCount=7,interval=1,encoding='utf-8')
 root_fh.setFormatter(log_formatter)
+root_fh.setLevel(logging.DEBUG)
 root_logger.addHandler(root_fh)
 
 console_hdr = logging.StreamHandler()
