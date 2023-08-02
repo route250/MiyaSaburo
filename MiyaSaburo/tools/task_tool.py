@@ -79,15 +79,15 @@ class AITaskRepo:
         with self._cv:
             try:
                 now_sec = int( time.time() )
-                task_list = []
-                submit_list = []
+                task_list = list[AITask]()
+                submit_list = list[AITask]()
                 for t in self._task_list:
                     if t.time_sec>now_sec:
                         task_list.append(t)
                     if t.time_sec>10:
                         submit_list.append(t)
                         logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
-
+                self._task_list.clear()
                 self._task_list = task_list
                 if len(submit_list)>0:
                     self.logdump()
