@@ -28,6 +28,22 @@ class AITask:
         self.purpose = Utils.strip(purpose)
         self.action = Utils.strip(action)
 
+    def is_valid(self) -> bool:
+        if self.time_sec<10:
+            return False
+        if self.purpose is not None and len(self.purpose)>0:
+            return True
+        if self.action is not None and len(self.action)>0:
+            return True
+        return False
+
+    def to_string(self):
+        if self.action is not None and len(self.action)>0:
+            return f"{self.date_time} {self.action}"
+        elif self.purpose is not None and len(self.purpose)>0:
+            return f"{self.date_time} {self.purpose}"
+        return f"{self.date_time} None"
+
 class AITaskRepo:
 
     def __init__(self):
@@ -65,7 +81,7 @@ class AITaskRepo:
                         result = "Not found task in " + date_time
                 elif cmd == TaskCmd.get:
                     if len(self._task_list)>0:
-                        result = " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
+                        result = " ".join([ t.to_string() for t in self._task_list if t.is_valid() and t.bot_id==bot_id])
                     else:
                         result = "no tasks."
                 logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
@@ -82,11 +98,12 @@ class AITaskRepo:
                 task_list = list[AITask]()
                 submit_list = list[AITask]()
                 for t in self._task_list:
-                    if t.time_sec>now_sec:
-                        task_list.append(t)
-                    elif t.time_sec>10:
-                        submit_list.append(t)
-                        logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
+                    if t.is_valid():
+                        if t.time_sec>now_sec:
+                            task_list.append(t)
+                        else:
+                            submit_list.append(t)
+                            logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
                 self._task_list.clear()
                 self._task_list = task_list
                 if len(submit_list)>0:

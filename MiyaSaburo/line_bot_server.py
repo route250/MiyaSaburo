@@ -4,7 +4,7 @@ import time
 import queue
 import threading
 
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from flask.logging import default_handler
 from linebot.v3 import (
     WebhookHandler
@@ -18,7 +18,8 @@ from linebot.v3.messaging import (
     MessagingApi,
     ReplyMessageRequest,
     PushMessageRequest,
-    TextMessage
+    TextMessage,
+    ApiException
 )
 from linebot.v3.webhooks import (
     MessageEvent,
@@ -72,12 +73,12 @@ msg_exec_queue : queue.Queue = queue.Queue()
 msg_running : bool = False
 
 #環境変数取得
-LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
-LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
-LINE_WEBHOOK_PORT = os.environ["LINE_WEBHOOK_PORT"]
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN",None)
+LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET",None)
+LINE_WEBHOOK_PORT = os.environ.get("LINE_WEBHOOK_PORT",None)
 
-line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET)
+line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN) if LINE_CHANNEL_ACCESS_TOKEN else None
+line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRET else None
 
 agent_repo_path = "agents"
 os.makedirs(agent_repo_path,exist_ok=True)
@@ -95,6 +96,8 @@ def callback():
     # handle webhook body
     try:
         line_webhook_handler.handle(body, signature)
+    except ApiException as e:
+        app.logger.warn("Got exception from LINE Messaging API: %s\n" % e.body)
     except InvalidSignatureError:
         abort(400)
     return 'OK'
@@ -103,6 +106,26 @@ def callback():
 def handle_message(event:MessageEvent):
     msg_accept_queue.put(event)
 
+@app.route("/debug", methods=['POST'])
+def debug_service():
+    try:
+        data = request.json  # 受信したJSONデータを取得
+        botlogger.debug("xxx start")
+
+        userid = data.get('userid','debug')
+        query = data.get('query','テスト')
+        
+        agent = bot_repo.get_agent(userid)
+        agent.task_repo = task_repo
+        agent.news_repo = news_repo
+        
+        reply = agent.llm_run(query)
+        
+        data['reply'] = reply
+        return jsonify(data)  # 受信したデータをJSON形式で返信
+    except Exception as e:
+        return jsonify({'error': str(e)})
+    
 class RequestData:
     def __init__(self,event:MessageEvent=None, task:AITask=None):
         self.message_event:MessageEvent = None
