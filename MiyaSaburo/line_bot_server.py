@@ -85,7 +85,6 @@ task_repo = AITaskRepo()
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    botlogger.error("callback")
     # get X-Line-Signature header value
     signature = request.headers['X-Line-Signature']
     # get request body as text
@@ -97,6 +96,10 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return 'OK'
+
+@line_webhook_handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event:MessageEvent):
+    msg_accept_queue.put(event)
 
 class RequestData:
     def __init__(self,event:MessageEvent=None, task:AITask=None):
@@ -112,11 +115,6 @@ class RequestData:
             self.task:AITask = task
         else:
             raise Exception("invalid request?")
-
-@line_webhook_handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event:MessageEvent):
-    botlogger.error("handle_message")
-    msg_accept_queue.put(event)
 
 def message_accept_thread():
     global msg_running

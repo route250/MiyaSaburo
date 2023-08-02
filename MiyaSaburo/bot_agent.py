@@ -261,7 +261,7 @@ class BotAgent(AbstractBot):
         self.callback_list = [ LoggerCallbackHdr(self) ]
 
         # ツールの準備
-        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model)
+        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model, timeout=30, request_timeout=10)
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False,callbacks=self.callback_list)
         web_tool = WebSearchTool()
         self.task_repo: AITaskRepo = None
@@ -281,8 +281,8 @@ class BotAgent(AbstractBot):
         for t in self.tools:
             t.callbacks = self.callback_list
         # メモリの準備
-        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model)
-        self.agent_memory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=600, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
+        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, timeout=30, request_timeout=10 )
+        self.agent_memory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=800, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
 
         self.anser_list = []
         self.last_call = int(time.time())
@@ -396,7 +396,7 @@ class BotAgent(AbstractBot):
             self.task_tool.task_repo = self.task_repo # 実行前に設定されるはず
             self.log_info(f"[LLM] you text:{query}")
                 
-            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False)
+            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=30, request_timeout=10 )
             # メインプロンプト設定
             # ポスト処理
             # prompt

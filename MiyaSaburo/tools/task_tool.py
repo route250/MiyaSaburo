@@ -35,56 +35,85 @@ class AITaskRepo:
         self._last_call = 0
         self.task_queue = queue.Queue()
 
+    def logdump(self):
+        if logger.isEnabledFor(logging.DEBUG):
+            dump = "\n".join([ f"{t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" for t in self._task_list])
+            logger.debug(dump)
+
     def call( self, bot_id:str, cmd : TaskCmd, date_time : str, purpose: str = None, action: str = None ):
-        if cmd == TaskCmd.add:
-            task = AITask( bot_id, date_time, purpose, action )
-            self._task_list.append(task)
-            return "Reserved at "+date_time
-        elif cmd == TaskCmd.cancel:
-            new_list = []
-            for t in self._task_list:
-                if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
-                    new_list.append(t)
-            removed = len(self._task_list)-len(new_list)
-            if removed>0:
-                self._task_list = new_list
-                return "Cancelled from " + date_time
-            else:
-                return "Not found task in " + date_time
-        elif cmd == TaskCmd.get:
-            if len(self._task_list)>0:
-                return " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
-            else:
-                return "no tasks."
+        try:
+            result = None
+            if cmd == TaskCmd.add:
+                task = AITask( bot_id, date_time, purpose, action )
+                if task.time_sec>10:
+                    self._task_list.append(task)
+                    result = "Reserved at "+date_time
+                else:
+                    result = f"Invalid date time \"{date_time}\""
+            elif cmd == TaskCmd.cancel:
+                new_list = []
+                for t in self._task_list:
+                    if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
+                        new_list.append(t)
+                removed = len(self._task_list)-len(new_list)
+                if removed>0:
+                    self._task_list = new_list
+                    result = "Cancelled from " + date_time
+                else:
+                    result = "Not found task in " + date_time
+            elif cmd == TaskCmd.get:
+                if len(self._task_list)>0:
+                    result = " ".join([ f"{t.date_time} {t.action}" for t in self._task_list if t.bot_id==bot_id])
+                else:
+                    result = "no tasks."
+            logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
+        except:
+            logger.exception(f"eror in task repo call {bot_id} {cmd} {date_time} {purpose} {action}")
+            result = None
+        self.logdump()
+        return result
 
     def timer_event(self) -> list[AITask]:
-        now_sec = int( time.time() )
-        task_list = []
-        submit_list = []
-        for t in self._task_list:
-            if t.time_sec<=now_sec:
-                submit_list.append(t)
-            else:
-                task_list.append(t)
-        self._task_list = task_list
-        return submit_list
+        try:
+            now_sec = int( time.time() )
+            task_list = []
+            submit_list = []
+            for t in self._task_list:
+                if t.time_sec>now_sec:
+                    task_list.append(t)
+                if t.time_sec>10:
+                    submit_list.append(t)
+                    logger.debug( f"timver_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
+
+            self._task_list = task_list
+            if len(submit_list)>0:
+                self.logdump()
+            return submit_list
+        except:
+            logger.exception(f"eror in task repo timer_event")
+        return []
 
     def get_task(self,ai_id:str) -> AITask:
-        size = len(self._task_list)
-        if size==0:
-            return None
-        now_sec = int( time.time() )
-        idx = 0
-        while idx<size:
-            task = self._task_list[idx]
-            if task.bot_id == ai_id and task.time_sec <= now_sec:
-                break
-            idx+=1
-        if idx>=size:
-            return None
-        submit = self._task_list[idx]
-        del self._task_list[idx]
-        return submit
+        try:
+            size = len(self._task_list)
+            if size==0:
+                return None
+            now_sec = int( time.time() )
+            idx = 0
+            while idx<size:
+                task = self._task_list[idx]
+                if task.bot_id == ai_id and task.time_sec <= now_sec:
+                    break
+                idx+=1
+            if idx>=size:
+                return None
+            submit = self._task_list[idx]
+            del self._task_list[idx]
+            self.logdump()
+            return submit
+        except:
+            logger.exception(f"eror in task repo get_task {ai_id}")
+        return None
 
 # Toolの入力パラメータを定義するモデル
 class AITaskInput(BaseModel):
@@ -107,40 +136,34 @@ class AITaskTool(BaseTool):
     task_repo: AITaskRepo = None
 
     def _run( self, cmd:TaskCmd, date_time: str='', purpose:str='', action:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
+        result = None
         try:
-            logger.info(f"start {cmd},{date_time},{purpose},{action}")
-            header = ""
-            now = int(time.time())
-            sec = Utils.to_unix_timestamp_seconds(date_time) if date_time and len(date_time)>0 else 0
-            if sec < 10:
-                if cmd == TaskCmd.add:
-                    return f"\"{date_time}\" is ambiguous. Ask the user for the time."
-                elif cmd == TaskCmd.cancel:
-                    cmd = TaskCmd.get
-                    header = f"\"{date_time}\" is ambiguous. Select from belows. "
-            elif sec < (now-10):
-                if cmd == TaskCmd.add:
-                    return f"\"{date_time}\" is passt time. Ask the user for the time."
-            if self.task_repo:
-                res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
-                if res:
-                    logger.info(f"end {header+res}")
-                    return header + res
-                if cmd == TaskCmd.add:
-                    logger.info(f"fail")
-                    return "Reserved at "+date_time
-                elif cmd == TaskCmd.cancel:
-                    logger.info(f"fail")
-                    return "Cancelled " + date_time
-                elif cmd == TaskCmd.get:
-                    logger.info(f"fail")
-                    return "Cancelled " + date_time
-            else:
+            if self.task_repo is None:
                 logger.error("task_repo is null")
-                return "out of service."
+                result = "out of service."
+            else:
+                header = ""
+                now = int(time.time())
+                sec = Utils.to_unix_timestamp_seconds(date_time) if date_time and len(date_time)>0 else 0
+                if sec < 10 and cmd == TaskCmd.cancel:
+                    cmd = TaskCmd.get
+                    header = f"\"{date_time}\" is ambiguous. Select from belows."
+                if sec < 10 and cmd == TaskCmd.add:
+                    result = f"\"{date_time}\" is ambiguous. Ask the user for the time."
+                elif sec < (now-10) and cmd == TaskCmd.add:
+                    result = f"\"{date_time}\" is passt time. Ask the user for the time."
+                else:
+                    res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
+                    if res:
+                        result = header + res
+                    else:
+                        logger.error(f"task_repo.call() returned None")
+                        result = "Repository as problem?"
         except Exception as ex:
             logger.exception("")
-        return "System Error"
+            result = "System Error"
+        logger.info(f"TaskTool {cmd},{date_time},{purpose},{action} result {result}")
+        return result
 
     async def _arun(self, query: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None) -> str:
         """Use the tool asynchronously."""
