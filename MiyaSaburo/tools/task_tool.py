@@ -81,7 +81,8 @@ class AITaskRepo:
                         result = "Not found task in " + date_time
                 elif cmd == TaskCmd.get:
                     if len(self._task_list)>0:
-                        result = " ".join([ t.to_string() for t in self._task_list if t.is_valid() and t.bot_id==bot_id])
+                        result = " , ".join([ t.to_string() for t in self._task_list if t.is_valid() and t.bot_id==bot_id])
+                        result = f"Your task is {result}"
                     else:
                         result = "no tasks."
                 logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
