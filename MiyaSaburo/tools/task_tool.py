@@ -84,7 +84,7 @@ class AITaskRepo:
                 for t in self._task_list:
                     if t.time_sec>now_sec:
                         task_list.append(t)
-                    if t.time_sec>10:
+                    elif t.time_sec>10:
                         submit_list.append(t)
                         logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
                 self._task_list.clear()
