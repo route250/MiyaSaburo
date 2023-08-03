@@ -19,29 +19,29 @@ class TaskCmd(str, Enum):
 
 class AITask:
     _instance_count = 0
-    def __init__(self, bot_id:str, date_time:str, purpose:str=None, action:str=None ):
+    def __init__(self, bot_id:str, date_time:str, how_to_do:str=None, what_to_do:str=None ):
         self.task_id = AITask._instance_count
         AITask._instance_count+=1
         self.bot_id = bot_id
         self.date_time = date_time
         self.time_sec = Utils.to_unix_timestamp_seconds(date_time)
-        self.purpose = Utils.strip(purpose)
-        self.action = Utils.strip(action)
+        self.how_to_do = Utils.strip(how_to_do)
+        self.what_to_do = Utils.strip(what_to_do)
 
     def is_valid(self) -> bool:
         if self.time_sec<10:
             return False
-        if self.purpose is not None and len(self.purpose)>0:
+        if self.how_to_do is not None and len(self.how_to_do)>0:
             return True
-        if self.action is not None and len(self.action)>0:
+        if self.what_to_do is not None and len(self.what_to_do)>0:
             return True
         return False
 
     def to_string(self):
-        if self.action is not None and len(self.action)>0:
-            return f"{self.date_time} {self.action}"
-        elif self.purpose is not None and len(self.purpose)>0:
-            return f"{self.date_time} {self.purpose}"
+        if self.what_to_do is not None and len(self.what_to_do)>0:
+            return f"{self.date_time} {self.what_to_do}"
+        elif self.how_to_do is not None and len(self.how_to_do)>0:
+            return f"{self.date_time} {self.how_to_do}"
         return f"{self.date_time} None"
 
 class AITaskRepo:
@@ -54,15 +54,15 @@ class AITaskRepo:
 
     def logdump(self):
         with self._cv:
-            dump = "\n".join([ f"{t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" for t in self._task_list])
+            dump = "\n".join([ f"{t.bot_id} {t.date_time} {t.time_sec} {t.how_to_do} {t.what_to_do}" for t in self._task_list])
             logger.debug( f"task dump\n{dump}")
 
-    def call( self, bot_id:str, cmd : TaskCmd, date_time : str, purpose: str = None, action: str = None ):
+    def call( self, bot_id:str, cmd : TaskCmd, date_time : str, how_to_do: str = None, what_to_do: str = None ):
         with self._cv:
             try:
                 result = None
                 if cmd == TaskCmd.add:
-                    task = AITask( bot_id, date_time, purpose, action )
+                    task = AITask( bot_id, date_time, how_to_do, what_to_do )
                     if task.time_sec>10:
                         self._task_list.append(task)
                         result = "Reserved at "+date_time
@@ -71,7 +71,7 @@ class AITaskRepo:
                 elif cmd == TaskCmd.cancel:
                     new_list = []
                     for t in self._task_list:
-                        if t.bot_id != bot_id or t.date_time != date_time or (action and t.action != action):
+                        if t.bot_id != bot_id or t.date_time != date_time or (what_to_do and t.what_to_do != what_to_do):
                             new_list.append(t)
                     removed = len(self._task_list)-len(new_list)
                     if removed>0:
@@ -85,9 +85,9 @@ class AITaskRepo:
                         result = f"Your task is {result}"
                     else:
                         result = "no tasks."
-                logger.info(f"task repo call {bot_id} {cmd} {date_time} {purpose} {action} result {result}")
+                logger.info(f"task repo call {bot_id} {cmd} {date_time} {how_to_do} {what_to_do} result {result}")
             except:
-                logger.exception(f"eror in task repo call {bot_id} {cmd} {date_time} {purpose} {action}")
+                logger.exception(f"eror in task repo call {bot_id} {cmd} {date_time} {how_to_do} {what_to_do}")
                 result = None
             self.logdump()
             return result
@@ -104,7 +104,7 @@ class AITaskRepo:
                             task_list.append(t)
                         else:
                             submit_list.append(t)
-                            logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.purpose} {t.action}" )
+                            logger.debug( f"timer_event get {t.bot_id} {t.date_time} {t.time_sec} {t.how_to_do} {t.what_to_do}" )
                 self._task_list.clear()
                 self._task_list = task_list
                 if len(submit_list)>0:
@@ -141,8 +141,8 @@ class AITaskRepo:
 class AITaskInput(BaseModel):
     cmd: TaskCmd
     date_time: str = Field( '', description='Time to reserve a task by YYYY/MM/DD HH:MM:SS. If you unclear the time, then ask to user')
-    purpose: str = Field( '', description='why do it and goals to achieve')
-    action: str = Field( '', description='what you should do.')
+    how_to_do: str = Field( '', description='How to do this task')
+    what_to_do: str = Field( '', description='What to do or What are you talking about.')
 
 # LangChainのAgentに渡すtool
 class AITaskTool(BaseTool):
@@ -157,7 +157,12 @@ class AITaskTool(BaseTool):
     bot_id : str = None
     task_repo: AITaskRepo = None
 
-    def _run( self, cmd:TaskCmd, date_time: str='', purpose:str='', action:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
+    convert = {
+        "教える": "時間になったのを知らせる",
+        "教えること": "時間になったのを知らせる",
+        "知らせる": "時間になったのを知らせる",
+    }
+    def _run( self, cmd:TaskCmd, date_time: str='', how_to_do:str='', what_to_do:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
         result = None
         try:
             if self.task_repo is None:
@@ -175,7 +180,10 @@ class AITaskTool(BaseTool):
                 elif sec < (now-10) and cmd == TaskCmd.add:
                     result = f"\"{date_time}\" is passt time. Ask the user for the time."
                 else:
-                    res = self.task_repo.call( self.bot_id, cmd, date_time, purpose, action)
+                    if cmd == TaskCmd.add:
+                        how_to_do = self.convert.get(how_to_do,how_to_do)
+                        what_to_do = self.convert.get(what_to_do,what_to_do)
+                    res = self.task_repo.call( self.bot_id, cmd, date_time, how_to_do, what_to_do)
                     if res:
                         result = header + res
                     else:
@@ -184,7 +192,7 @@ class AITaskTool(BaseTool):
         except Exception as ex:
             logger.exception("")
             result = "System Error"
-        logger.info(f"TaskTool {cmd},{date_time},{purpose},{action} result {result}")
+        logger.info(f"TaskTool {cmd},{date_time},{how_to_do},{what_to_do} result {result}")
         return result
 
     async def _arun(self, query: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None) -> str:

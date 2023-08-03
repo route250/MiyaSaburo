@@ -468,6 +468,7 @@ class BotAgent(AbstractBot):
                 for t in range(0,2):
                     try:
                         res_text = agent_chain.run(input=query)
+                        self._ai_message(talk_id,res_text)
                         break
                     except OutputParserException as ex:
                         self.log_error( "",ex)

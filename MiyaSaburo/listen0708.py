@@ -1036,7 +1036,7 @@ def LLM_process():
                 if not ( thread and thread.is_alive() ) and llm_queue.qsize()==0:
                     task : AITask = task_repo.get_task(ai_id)
                     if task:
-                        q = "It's the reserved time, so you do \"" + task.action + "\" in now for \"" + task.purpose +"\"."+AppModel.LONG_BLANK
+                        q = "It's the reserved time, so you do \"" + task.what_to_do + "\" in now for \"" + task.how_to_do +"\"."+AppModel.LONG_BLANK
                         llm_queue.put((in_talk,q))
 
                 if llm_queue.qsize()==0:

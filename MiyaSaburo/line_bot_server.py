@@ -118,7 +118,6 @@ def debug_service():
         agent = bot_repo.get_agent(userid)
         agent.task_repo = task_repo
         agent.news_repo = news_repo
-        
         reply = agent.llm_run(query)
         
         data['reply'] = reply
@@ -136,7 +135,7 @@ class RequestData:
             self.message_event:MessageEvent = event
         elif task:
             self.userid = task.bot_id
-            self.query = f"It's the reserved time, so you do \"{task.action}\" in now for \"{task.purpose}\"."
+            self.query = f"Do the your task of \"{task.what_to_do}\" \"{task.how_to_do}\"."
             self.task:AITask = task
         else:
             raise Exception("invalid request?")
@@ -189,6 +188,35 @@ def message_loop_thread():
         finally:
             pass
 
+class ResponseFunction:
+    def __init__(self,request:RequestData):
+        self.request = request
+    def response(self, talk_id, message):
+        try:
+            botlogger.debug("response")
+            with ApiClient(line_config) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                if self.request.message_event:
+                    line_bot_api.reply_message_with_http_info(
+                        ReplyMessageRequest(
+                            replyToken=self.request.message_event.reply_token,
+                            messages=[TextMessage(text=message)]
+                        )
+                    )
+                elif self.request.task:
+                    line_bot_api.push_message(
+                        PushMessageRequest(
+                            to=self.request.userid,
+                            messages=[TextMessage(text=message)]
+                        )
+                    )
+                else:
+                    botlogger.error("invalid request. no event and no task")
+        except Exception as ex:
+            botlogger.exception("")
+            print(ex)
+        botlogger.info("xxx end")
+
 #　これが３スレッド動くはず
 def message_threadx(request:RequestData):
     reply = 'zzzzz.......'
@@ -199,35 +227,13 @@ def message_threadx(request:RequestData):
         agent = bot_repo.get_agent(userid)
         agent.task_repo = task_repo
         agent.news_repo = news_repo
+        x = ResponseFunction(request)
+        agent.callback = x.response
         reply = agent.llm_run(query)
     except Exception as ex:
         reply = "(orz)"
         botlogger.exception("")
         print(ex)
-    try:
-        botlogger.debug("response")
-        with ApiClient(line_config) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            if request.message_event:
-                line_bot_api.reply_message_with_http_info(
-                    ReplyMessageRequest(
-                        replyToken=request.message_event.reply_token,
-                        messages=[TextMessage(text=reply)]
-                    )
-                )
-            elif request.task:
-                line_bot_api.push_message(
-                    PushMessageRequest(
-                        to=userid,
-                        messages=[TextMessage(text=reply)]
-                    )
-                )
-            else:
-                botlogger.error("invalid request. no event and no task")
-    except Exception as ex:
-        botlogger.exception("")
-        print(ex)
-    botlogger.info("xxx end")
 
 def main():
     global msg_running
