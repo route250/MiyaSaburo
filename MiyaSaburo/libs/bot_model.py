@@ -109,7 +109,7 @@ from langchain.agents import initialize_agent, load_tools, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.chat_models import ChatOpenAI
 from langchain.schema.messages import BaseMessage
-
+from libs.logging_callback_handler import LoggerCallbackHdr
 
 #--------------------------------------------------------
 class LL01Bot(AbstractBot):
