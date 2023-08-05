@@ -8,7 +8,17 @@ import time
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import typing
-
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    cast,
+)
+from json import JSONDecodeError
 import openai
 import langchain
 from langchain import LLMMathChain
@@ -51,30 +61,29 @@ class BotTimerTask:
 
 class BotRepository:
     def __init__(self, path):
-        self._lock = threading.Lock()
-        self._last_timer_sec = int(time.time()*1000)
-        self._map :dict = dict()
+        self._cv = threading.Condition()
+        self._last_timer_sec = int(time.time())
+        self._agent_map :dict[str,BotAgent] = dict()
+        self._summarize_map: dict[str,float] = dict()
         self.repo_path = path
-        self.unload_min = 10
+        self.unload_min = 1
+        self.summarize_min = self.unload_min + 1
         self.timer_task_list = list[BotTimerTask]
 
     def size(self) ->int:
-        return len(self._map)
+        return len(self._agent_map)
 
-    def get_agent(self, userid ):
-        try:
-            self._lock.acquire()
-            agent:BotAgent = self._map.get(userid)
+    def get_agent(self, userid: str ):
+        with self._cv:
+            agent:BotAgent = self._agent_map.get(userid)
             if agent is None:
                 agent = BotAgent(userid)
                 agent.logger.setLevel(logging.DEBUG)
-                self._map[userid] = agent
+                self._agent_map[userid] = agent
                 agent.load(self.repo_path)
             self.load_time_sec = int(time.time())
             self.configure_agent(agent)
             return agent
-        finally:
-            self._lock.release()
 
     def configure_agent(self, agent ):
                 # system_prompt = """
@@ -96,17 +105,28 @@ class BotRepository:
         if (now_sec-self._last_timer_sec)<10:
             return
         self._last_timer_sec = now_sec
-        try:
-            self._lock.acquire()
-            min = self.unload_min * 60
-            for userid in list(self._map.keys()):
-                agent:BotAgent = self._map.get(userid)
-                if (now_sec-agent.last_call_sec)>min and (now_sec-agent.load_time_sec)>min:
+        with self._cv:
+            # ---
+            unload_sec = self.unload_min * 60
+            for userid in list(self._agent_map.keys()):
+                agent:BotAgent = self._agent_map.get(userid)
+                if (now_sec-agent.last_call_sec)>unload_sec and (now_sec-agent.load_time_sec)>unload_sec:
+                    self._summarize_map[userid] = agent.last_call_sec
                     agent.unload(self.repo_path)
-                    del self._map[userid]
-                    break
-        finally:
-            self._lock.release()
+                    del self._agent_map[userid]
+                    return
+            # ---
+            summarize_sec = self.summarize_min * 60
+            for userid in list(self._summarize_map.keys()):
+                last_call = self._summarize_map[userid]
+                if (now_sec-last_call)>summarize_sec:
+                    agent = self.get_agent(userid)
+                    agent.summarize()
+                    agent.last_call_sec = last_call
+                    agent.unload(self.repo_path)
+                    del self._agent_map[userid]
+                    del self._summarize_map[userid]
+                    return
     
     def add_timer_task(self,userid:str,time:int,callback,title=None):
         task = BotTimerTask(userid,time,callback,title=title)
@@ -149,7 +169,7 @@ class ToneV:
         "お聞きください",
         "お聞かせください",
         "お話しください",
-        "困っているのか教えてください",
+        "困っているのか教えてください", "お困りですか",
         "教えていただけますか",
         "お話を教えてください",
 
@@ -246,6 +266,34 @@ class ToneV:
             result.append(m)
         return result
 
+class ExChatOpenAI(ChatOpenAI):
+    def predict_messages(
+        self,
+        messages: List[BaseMessage],
+        *,
+        stop: Optional[Sequence[str]] = None,
+        **kwargs: Any,
+    ) -> BaseMessage:
+        
+        tmp_messages = messages
+        for t in range(0,2):
+            message: BaseMessage = super().predict_messages(tmp_messages,stop=stop,**kwargs)
+            if isinstance(message, AIMessage):
+                function_call = message.additional_kwargs.get("function_call", {})
+                if function_call:
+                    function_name = function_call.get("name","")
+                    function_args = function_call.get("arguments","")
+                    try:
+                        _tool_input = json.loads(function_args)
+                        break
+                    except JSONDecodeError:
+                        print( f"ERROR: function {function_name}  {function_args} ")
+                        if function_args=='{':
+                            function_call["arguments"] = "{}"
+                        tmp_messages = messages + [ HumanMessage(f"Could not parse JSOIN: {function_args}") ]
+            else:
+                break
+        return message
 
 class BotAgent(AbstractBot):
     TIMEOUT:int = 120
@@ -286,7 +334,7 @@ class BotAgent(AbstractBot):
             t.callbacks = self.callback_list
         # メモリの準備
         mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT )
-        self.agent_memory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=800, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
+        self.agent_memory: ExtConversationSummaryBufferMemory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=800, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
 
         self.anser_list = []
         self.load_time_sec = int(time.time())
@@ -310,10 +358,10 @@ class BotAgent(AbstractBot):
     def unload(self,path):
         if not self.userid or not path:
             return
-        logger.info(f"unload to {json_file}")
         os.makedirs(path,exist_ok=True)
-        json_data = self.to_dict()
         json_file = self._file_path(path)
+        logger.info(f"unload to {json_file}")
+        json_data = self.to_dict()
         with open(json_file,"w") as fp:
             json.dump(json_data,fp,indent=4)
 
@@ -351,10 +399,27 @@ class BotAgent(AbstractBot):
             json_data['memory']=mem
         return json_data
 
-    def tone_convert(self, message: str) -> str:
-        return ToneV.tone_convert(message)
+    def summarize(self) -> None:
+        # タイマーから起動されて、記憶を全部要約する
+        self.log_info("summarize...")
+        if len(self.agent_memory.chat_memory.messages)>0:
+            before = self.agent_memory.max_token_limit
+            try:
+                self.agent_memory.max_token_limit = 10
+                self.agent_memory.prune()
+            except Exception as ex:
+                self.log_error("",ex)
+            finally:
+                self.agent_memory.max_token_limit = before
 
-    def ago(self, sec: int ) -> str:
+    def tone_convert(self, message: str) -> str:
+        msg2 = ToneV.tone_convert(message)
+        if message != msg2:
+            self.log_info(f"convert {message}\nto {msg2}")
+        return msg2
+
+    @staticmethod
+    def ago( sec: int ) -> str:
         min = int(sec/60)
         if min<10:
             return None
@@ -403,7 +468,7 @@ class BotAgent(AbstractBot):
             self.task_tool.task_repo = self.task_repo # 実行前に設定されるはず
             self.log_info(f"[LLM] you text:{query}")
                 
-            agent_llm = ChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT )
+            agent_llm = ExChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT )
             # メインプロンプト設定
             # ポスト処理
             # prompt
@@ -414,20 +479,10 @@ class BotAgent(AbstractBot):
                 
             # 記憶の整理
             now = int(time.time())
-            ago_mesg = self.ago( now-self.last_call_sec)
+            ago_mesg = BotAgent.ago( now-self.last_call_sec)
             if ago_mesg:
-                # 記憶を要約
                 event_text = []
-                if len(self.agent_memory.chat_memory.messages)>0:
-                    before = self.agent_memory.max_token_limit
-                    try:
-                        self.agent_memory.max_token_limit = 10
-                        self.agent_memory.prune()
-                    except Exception as ex:
-                        self.log_error("",ex)
-                    finally:
-                        self.agent_memory.max_token_limit = before
-                    event_text.append(ago_mesg)
+                event_text.append(ago_mesg)
                 # 出来事を追加
                 if self.news_repo:
                     news : NewsData = self.news_repo.random_get(self.userid)
@@ -465,17 +520,26 @@ class BotAgent(AbstractBot):
             save_max_tokens = agent_llm.max_tokens
             save_temperature = agent_llm.temperature
             try:
-                for t in range(0,2):
+                for t in range(3,-1,-1):
                     try:
                         res_text = agent_chain.run(input=query)
                         self._ai_message(talk_id,res_text)
                         break
                     except OutputParserException as ex:
-                        self.log_error( "",ex)
                         res_text = f"{ex}"
-                        self._ai_message(talk_id,res_text)
-                        agent_llm.temperature = 0
-                        agent_llm.max_tokens += 100
+                        if res_text.startswith("Could not parse tool input:"):
+                            if t>0:
+                                print(f"ERROR:{res_text}")
+                                self.agent_memory.ext_save_context( query, res_text )
+                            else:
+                                print(f"ERROR:{res_text}")
+                                self._ai_message(talk_id,"えらーが発生しました")
+                            agent_llm.temperature = 0
+                            agent_llm.max_tokens += 100
+                        else:
+                            self.log_error( "",ex)
+                            self._ai_message(talk_id,"エラーが発生しました")
+                            break
             finally:
                 agent_llm.max_tokens = save_max_tokens
                 agent_llm.temperature = save_temperature
@@ -484,6 +548,9 @@ class BotAgent(AbstractBot):
             if len(self.agent_memory.chat_memory.messages)>0:
                 anser = self.agent_memory.chat_memory.messages[-1].content
             print(f"[LLM] GPT anser:{anser}")
+
+            # 記憶の整理
+
             return anser
             # self.anser_list = re.split(r"(?<=[。\n])",anser)
             # return self.anser_list.pop(0) if self.anser_list else ""

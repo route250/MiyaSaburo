@@ -31,18 +31,12 @@ class AITask:
     def is_valid(self) -> bool:
         if self.time_sec<10:
             return False
-        if self.how_to_do is not None and len(self.how_to_do)>0:
-            return True
-        if self.what_to_do is not None and len(self.what_to_do)>0:
-            return True
-        return False
+        if Utils.is_empty(self.how_to_do) and Utils.is_empty(self.what_to_do):
+            return False
+        return True
 
     def to_string(self):
-        if self.what_to_do is not None and len(self.what_to_do)>0:
-            return f"{self.date_time} {self.what_to_do}"
-        elif self.how_to_do is not None and len(self.how_to_do)>0:
-            return f"{self.date_time} {self.how_to_do}"
-        return f"{self.date_time} None"
+        return f"{Utils.empty_to_blank(self.date_time)} {Utils.empty_to_blank(self.what_to_do)} {Utils.empty_to_blank(self.how_to_do)}"
 
 class AITaskRepo:
 
@@ -63,7 +57,7 @@ class AITaskRepo:
                 result = None
                 if cmd == TaskCmd.add:
                     task = AITask( bot_id, date_time, how_to_do, what_to_do )
-                    if task.time_sec>10:
+                    if task.is_valid():
                         self._task_list.append(task)
                         result = "Reserved at "+date_time
                     else:
@@ -162,12 +156,14 @@ class AITaskTool(BaseTool):
         "教えること": "時間になったのを知らせる",
         "知らせる": "時間になったのを知らせる",
     }
-    def _run( self, cmd:TaskCmd, date_time: str='', how_to_do:str='', what_to_do:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
+    def _run( self, cmd:TaskCmd = None, date_time: str='', how_to_do:str='', what_to_do:str='', run_manager: Optional[CallbackManagerForToolRun] = None ) -> str:
         result = None
         try:
             if self.task_repo is None:
                 logger.error("task_repo is null")
                 result = "out of service."
+            elif cmd is None:
+                result = "invalud arguments"
             else:
                 header = ""
                 now = int(time.time())

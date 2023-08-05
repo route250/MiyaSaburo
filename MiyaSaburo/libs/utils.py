@@ -11,7 +11,15 @@ class Utils:
 
     @staticmethod
     def is_empty( text:str=None ) -> bool:
-        return not (text and len(text)>0)
+        return text is None or len(text)==0
+
+    @staticmethod
+    def empty_to_blank( text:str=None ) -> str:
+        return text if not Utils.is_empty(text) else ""
+
+    @staticmethod
+    def empty_to_none( text:str=None ) -> str:
+        return text if not Utils.is_empty(text) else None
 
     @staticmethod
     def strip( text:str=None ) -> str:

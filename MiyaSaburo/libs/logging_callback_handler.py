@@ -7,7 +7,8 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, AgentFinish, LLMResult
 from langchain.schema.document import Document
 from langchain.schema.messages import BaseMessage
-
+from langchain.schema.output_parser import OutputParserException
+import openai.error
 from libs.bot_model import AbstractBot
 
 class LoggerCallbackHdr(BaseCallbackHandler):
@@ -29,7 +30,14 @@ class LoggerCallbackHdr(BaseCallbackHandler):
     def on_chain_end(self,outputs: Dict[str, Any],*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
         self._bot.log_info(f"on_chain_end ")
     def on_chain_error(self,error: Union[Exception, KeyboardInterrupt],*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
-        self._bot.log_error(f"on_chain_error",error)
+        if type(error).__name__ == 'OutputParserException':
+            self._bot.log_error(f"on_chain_error {error}")
+        elif type(error).__name__ == 'Timeout':
+            self._bot.log_error(f"on_chain_error {error}")
+        elif type(error).__name__ == 'ValidationError':
+            self._bot.log_error(f"on_chain_error {error}")
+        else:
+            self._bot.log_error(f"on_chain_error",error)
     def on_agent_action(self,action: AgentAction,*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:
         self._bot.log_info(f"on_agent_action {self._bot.dumps(action.log,max_length=8192)}")
     def on_agent_finish(self,finish: AgentFinish,*,run_id: UUID,parent_run_id: Optional[UUID] = None,**kwargs: Any,) -> Any:

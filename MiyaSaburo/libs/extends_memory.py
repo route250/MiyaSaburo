@@ -56,3 +56,7 @@ class ExtConversationSummaryBufferMemory(ConversationSummaryBufferMemory):
         if ai_message and self.Bot is not None:
             outputs[output_key] = self.Bot.tone_convert(ai_message)
         super().save_context(inputs,outputs)
+
+    def ext_save_context(self, input_str: str, output_str: str ) -> None:
+        self.chat_memory.add_user_message(input_str)
+        self.chat_memory.add_ai_message(output_str)

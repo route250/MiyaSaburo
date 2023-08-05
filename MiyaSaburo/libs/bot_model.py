@@ -80,6 +80,8 @@ class AbstractBot(AbstractLoggerClass):
 
     def _ai_message( self, talk_id: int, message:str ) -> None:
         try:
+            if message.startswith("Could not parse tool input:"):
+                print(f"ERROR:{message}")
             if self.callback is None:
                 self.log_info(f"t#{talk_id} ai_message {self.dumps(message,8192)}")
             else:

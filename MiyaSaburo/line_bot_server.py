@@ -135,7 +135,7 @@ class RequestData:
             self.message_event:MessageEvent = event
         elif task:
             self.userid = task.bot_id
-            self.query = f"Do the your task of \"{task.what_to_do}\" \"{task.how_to_do}\"."
+            self.query = f"It's time to do the: \"{Utils.empty_to_blank(task.what_to_do)} {Utils.empty_to_blank(task.how_to_do)}\"."
             self.task:AITask = task
         else:
             raise Exception("invalid request?")
