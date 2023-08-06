@@ -133,7 +133,7 @@ class AITaskRepo:
 
 # Toolの入力パラメータを定義するモデル
 class AITaskInput(BaseModel):
-    cmd: TaskCmd
+    cmd: TaskCmd = Field(None, description='command')
     date_time: str = Field( '', description='Time to reserve a task by YYYY/MM/DD HH:MM:SS. If you unclear the time, then ask to user')
     how_to_do: str = Field( '', description='How to do this task')
     what_to_do: str = Field( '', description='What to do or What are you talking about.')

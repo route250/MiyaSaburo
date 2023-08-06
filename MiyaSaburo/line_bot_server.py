@@ -124,21 +124,60 @@ def debug_service():
         return jsonify(data)  # 受信したデータをJSON形式で返信
     except Exception as e:
         return jsonify({'error': str(e)})
-    
-class RequestData:
-    def __init__(self,event:MessageEvent=None, task:AITask=None):
-        self.message_event:MessageEvent = None
-        self.task:AITask = None
-        if event:
-            self.userid = event.source.user_id
-            self.query = event.message.text
-            self.message_event:MessageEvent = event
-        elif task:
-            self.userid = task.bot_id
-            self.query = f"It's time to do the: \"{Utils.empty_to_blank(task.what_to_do)} {Utils.empty_to_blank(task.how_to_do)}\"."
-            self.task:AITask = task
-        else:
-            raise Exception("invalid request?")
+
+from abc import ABC, ABCMeta, abstractmethod, abstractstaticmethod    
+
+class RequestData(ABC):
+    def __init__(self, userid: str):
+        self.userid = userid
+
+    @abstractmethod
+    def response_message(self, talk_id: str, message: str ) -> None:
+        pass
+
+class LineRepRequest(RequestData):
+    def __init__(self, event: MessageEvent ):
+        super().__init__( event.source.user_id )
+        self.message_event:MessageEvent = event
+        self.query = event.message.text
+
+    def response_message(self, talk_id: str, message: str ) -> None:
+        try:
+            botlogger.debug("line_reply start")
+            with ApiClient(line_config) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        replyToken=self.message_event.reply_token,
+                        messages=[TextMessage(text=message)]
+                    )
+                )
+        except Exception as ex:
+            botlogger.exception("")
+            print(ex)
+        botlogger.debug("line_reply end")
+
+class LineTaskRequest(RequestData):
+    def __init__(self, task:AITask ):
+        super().__init__( task.bot_id )
+        self.task:AITask = task
+        self.query = f"It's time to do the: \"{Utils.empty_to_blank(task.what_to_do)} {Utils.empty_to_blank(task.how_to_do)}\"."
+
+    def response_message(self, talk_id: str, message: str ) -> None:
+        try:
+            botlogger.debug("line_push start")
+            with ApiClient(line_config) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=self.userid,
+                        messages=[TextMessage(text=message)]
+                    )
+                )
+        except Exception as ex:
+            botlogger.exception("")
+            print(ex)
+        botlogger.info("line push end")
 
 def message_accept_thread():
     global msg_running
@@ -147,9 +186,12 @@ def message_accept_thread():
             event : MessageEvent = msg_accept_queue.get(block=True,timeout=5)
             if event:
                 botlogger.debug("accept")
-                msg_exec_queue.put( RequestData(event=event) )
+                msg_exec_queue.put( LineRepRequest(event=event) )
                 msg_accept_queue.task_done()
+        except queue.Empty:
+            time.sleep(0.2)
         except Exception as ex:
+            botlogger.exception("")
             time.sleep(0.2)
         finally:
             pass
@@ -162,7 +204,7 @@ def timer_loop_thread():
             list : list[AITask]= task_repo.timer_event()
             if list:
                 for t in list:
-                    msg_exec_queue.put(RequestData(task=t))
+                    msg_exec_queue.put(LineTaskRequest(task=t))
             else:
                 news_repo.call_timer()
                 bot_repo.call_timer()
@@ -182,40 +224,13 @@ def message_loop_thread():
                     message_threadx(request)
                 finally:
                     msg_exec_queue.task_done()
-        except Exception as ex:
+        except queue.Empty:
             time.sleep(0.2)
-            pass
-        finally:
-            pass
-
-class ResponseFunction:
-    def __init__(self,request:RequestData):
-        self.request = request
-    def response(self, talk_id, message):
-        try:
-            botlogger.debug("response")
-            with ApiClient(line_config) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                if self.request.message_event:
-                    line_bot_api.reply_message_with_http_info(
-                        ReplyMessageRequest(
-                            replyToken=self.request.message_event.reply_token,
-                            messages=[TextMessage(text=message)]
-                        )
-                    )
-                elif self.request.task:
-                    line_bot_api.push_message(
-                        PushMessageRequest(
-                            to=self.request.userid,
-                            messages=[TextMessage(text=message)]
-                        )
-                    )
-                else:
-                    botlogger.error("invalid request. no event and no task")
         except Exception as ex:
             botlogger.exception("")
-            print(ex)
-        botlogger.info("xxx end")
+            time.sleep(0.2)
+        finally:
+            pass
 
 #　これが３スレッド動くはず
 def message_threadx(request:RequestData):
@@ -227,8 +242,7 @@ def message_threadx(request:RequestData):
         agent = bot_repo.get_agent(userid)
         agent.task_repo = task_repo
         agent.news_repo = news_repo
-        x = ResponseFunction(request)
-        agent.callback = x.response
+        agent.callback = request.response_message
         reply = agent.llm_run(query)
     except Exception as ex:
         reply = "(orz)"

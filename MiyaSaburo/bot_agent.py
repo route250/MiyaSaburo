@@ -39,6 +39,7 @@ from langchain.prompts.chat import (AIMessagePromptTemplate,
 from langchain.schema import (OutputParserException, AIMessage, BaseChatMessageHistory, BaseMessage,
                               HumanMessage, SystemMessage, messages_from_dict,
                               messages_to_dict)
+from libs.extends_chatopenai import ExChatOpenAI
 from libs.CustomChatMessageHistory import CustomChatMessageHistory
 from tools.ChatNewsTool import NewsData, NewsRepo
 from tools.task_tool import AITask, AITaskRepo, AITaskTool, TaskCmd
@@ -266,37 +267,7 @@ class ToneV:
             result.append(m)
         return result
 
-class ExChatOpenAI(ChatOpenAI):
-    def predict_messages(
-        self,
-        messages: List[BaseMessage],
-        *,
-        stop: Optional[Sequence[str]] = None,
-        **kwargs: Any,
-    ) -> BaseMessage:
-        
-        tmp_messages = messages
-        for t in range(0,2):
-            message: BaseMessage = super().predict_messages(tmp_messages,stop=stop,**kwargs)
-            if isinstance(message, AIMessage):
-                function_call = message.additional_kwargs.get("function_call", {})
-                if function_call:
-                    function_name = function_call.get("name","")
-                    function_args = function_call.get("arguments","")
-                    try:
-                        _tool_input = json.loads(function_args)
-                        break
-                    except JSONDecodeError:
-                        print( f"ERROR: function {function_name}  {function_args} ")
-                        if function_args=='{':
-                            function_call["arguments"] = "{}"
-                        tmp_messages = messages + [ HumanMessage(f"Could not parse JSOIN: {function_args}") ]
-            else:
-                break
-        return message
-
 class BotAgent(AbstractBot):
-    TIMEOUT:int = 120
     REQUEST_TIMEOUT=30
     def __init__(self, userid:str):
         super().__init__( user_id = userid )
@@ -313,7 +284,7 @@ class BotAgent(AbstractBot):
         self.callback_list = [ LoggerCallbackHdr(self) ]
 
         # ツールの準備
-        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT)
+        match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=self.openai_model, request_timeout=BotAgent.REQUEST_TIMEOUT)
         llm_math_chain = LLMMathChain.from_llm(llm=match_llm,verbose=False,callbacks=self.callback_list)
         web_tool = WebSearchTool()
         self.task_repo: AITaskRepo = None
@@ -333,7 +304,7 @@ class BotAgent(AbstractBot):
         for t in self.tools:
             t.callbacks = self.callback_list
         # メモリの準備
-        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT )
+        mem_llm = ChatOpenAI(temperature=0, max_tokens=1000, model=self.openai_model, request_timeout=BotAgent.REQUEST_TIMEOUT )
         self.agent_memory: ExtConversationSummaryBufferMemory = ExtConversationSummaryBufferMemory( Bot=self, llm=mem_llm, max_token_limit=800, memory_key="memory_hanaya", return_messages=True, callbacks=self.callback_list)
 
         self.anser_list = []
@@ -468,7 +439,7 @@ class BotAgent(AbstractBot):
             self.task_tool.task_repo = self.task_repo # 実行前に設定されるはず
             self.log_info(f"[LLM] you text:{query}")
                 
-            agent_llm = ExChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, timeout=BotAgent.TIMEOUT, request_timeout=BotAgent.REQUEST_TIMEOUT )
+            agent_llm = ExChatOpenAI(verbose=False, temperature=0.7, max_tokens=2000, model=self.openai_model, streaming=False, request_timeout=BotAgent.REQUEST_TIMEOUT )
             # メインプロンプト設定
             # ポスト処理
             # prompt
