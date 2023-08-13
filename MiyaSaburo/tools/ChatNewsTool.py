@@ -37,18 +37,18 @@ class NewsData:
         return True
 
 class NewsRepo:
-    def __init__(self,query,qdr=None):
+    def __init__(self,query,num_result=None):
         self._last_timer = 0
         self._list : list[NewsData] = list()
         self._module = WebSearchModule()
         self.query = query
-        self.qdr = qdr
+        self.num_result = num_result
 
     def size(self) -> int:
         return len(self._list)
 
     def search(self):
-        ret = self._module.search_meta(self.query,qdr=self.qdr)
+        ret = self._module.search_meta(self.query,num_result=self.num_result)
         ret = [r for r in ret if 'snippet' in r and isinstance(r['snippet'], str) and len(r['snippet']) >= 1]
         snippet_list = [r['snippet'] for r in ret]
         vect_list = openai.embeddings_utils.get_embeddings(snippet_list)
@@ -87,7 +87,7 @@ class NewsRepo:
 def main(argv):
     userid = 'a0001'
 
-    news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',qdr="h48")
+    news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',num_result="h48")
 
     news_repo.search()
     news_repo.search()

@@ -39,8 +39,9 @@ class WebSearchModule:
         "https://www.jma.go.jp/bosai/forecast/","https://www.jma.go.jp/bosai/map.html",
         "https://www.jma-net.go.jp/",
         "https://s.n-kishou.co.jp/w/charge/","https://weather.yahoo.co.jp/",
+        "https://twitter.com"
     )
-    num_results: int = 4
+    DEFAULT_NUM_RESULT: int = 4
 
     def __init__(self):
         self.mUserAgent = WebSearchModule.UA_WIN10
@@ -79,10 +80,10 @@ class WebSearchModule:
             logger.exception("")
         return txt
 
-    def search_snippet(self, query: str) -> str:
+    def search_snippet(self, query: str, *,num_result=None) -> str:
         """Run query through GoogleSearch and parse result."""
         snippets = []
-        results = self.search_meta(query, num=self.num_results)
+        results = self.search_meta(query, num_result=num_result)
         if len(results) == 0:
             return "No good Google Search Result was found"
         for result in results:
@@ -126,8 +127,9 @@ class WebSearchModule:
             logger.exception("")
         return ""
 
-    def search_meta(self,aQuery, num=10,qdr=None, *, user_agent = None, timeout = None) -> list[dict]:
+    def search_meta(self,aQuery, *, num_result=None, user_agent = None, timeout = None) -> list[dict]:
 
+        num_result = num_result if num_result else WebSearchModule.DEFAULT_NUM_RESULT
         metadata_result = []
 
         user_agent = user_agent if user_agent else self.mUserAgent
@@ -136,8 +138,8 @@ class WebSearchModule:
         zEncQuery = WebSearchModule.urlEncode(aQuery)
         #zURL = mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&gl=us&hl=en"
         zURL = WebSearchModule.mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&hl=en"
-        if qdr:
-            zURL += f"&tbs=qdr:{qdr}"
+        if num_result:
+            zURL += f"&tbs=qdr:{num_result*2}"
 
         try:
             # requestsを使用してWebページを取得
@@ -190,7 +192,7 @@ class WebSearchModule:
                         continue
                     zResult["snippet"] = WebSearchModule.getText(zDiv)
                 metadata_result.append(zResult)
-                if len(metadata_result) >= self.num_results:
+                if len(metadata_result) >= num_result:
                     break
 
         except requests.exceptions.RequestException as e:
@@ -230,6 +232,8 @@ class WebSearchModule:
             os.makedirs("logs", exist_ok=True)
             with open("logs/content.html","wb") as f:
                 f.write(response.content)
+            if response.encoding is None or response.encoding=="ISO-8859-1":
+                response.encoding = "UTF-8"
             return WebSearchModule.get_content_from_bytes( response.content, response.encoding )
         except Exception as e:
             logger.exception("")
@@ -259,8 +263,8 @@ class WebSearchModule:
             for h_tag in zMain.xpath(WebSearchModule.XPATH_HTAG):
                 h_text = h_tag.text_content()
                 h_text = WebSearchModule.normalize(h_text)
-                print("----")
-                print(f"[DBG] {h_tag.tag} {WebSearchModule.dump_str(h_text)}")
+                ##print("----")
+                ##print(f"[DBG] {h_tag.tag} {WebSearchModule.dump_str(h_text)}")
                 text = WebSearchModule.get_next_content(h_tag,stop=True)
                 norm_text = WebSearchModule.normalize(text)
                 if len(norm_text)>0:

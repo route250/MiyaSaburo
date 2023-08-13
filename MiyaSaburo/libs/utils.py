@@ -2,7 +2,7 @@
 import logging
 import time
 from zoneinfo import ZoneInfo
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 class Utils:
 
@@ -28,15 +28,24 @@ class Utils:
         return None
 
     @staticmethod
-    def to_unix_timestamp_seconds( date_time:str) -> int:
+    def to_unix_timestamp_seconds( date_time:str, *, verbose = True) -> int:
         try:
             # 日付文字列をdatetimeオブジェクトに変換
-            dt_object = datetime.strptime(date_time, '%Y/%m/%d %H:%M:%S')
+            dt_object = None
+            for fmt in ['%Y/%m/%d %H:%M:%S','%Y-%m-%d %H:%M:%S','%Y/%m/%d','%Y-%m-%d']:
+                try:
+                    dt_object = datetime.strptime(date_time, fmt)
+                    break
+                except:
+                    pass
+            if dt_object is None:
+                raise Exception(f"invalid date string {date_time}")
             # Unix時間に変換 (秒単位)
             time = int(dt_object.replace(tzinfo=Utils.JST).timestamp())
             return time
         except:
-            Utils.logger.exception(f"date_time:\"{date_time}\"")
+            if verbose:
+                Utils.logger.exception(f"date_time:\"{date_time}\"")
             return 0
 
     @staticmethod
@@ -45,6 +54,34 @@ class Utils:
         dt_object = datetime.fromtimestamp(unix_time, Utils.JST)
         # フォーマットに変換して返す
         return dt_object.strftime('%Y/%m/%d %H:%M:%S')
+
+    @staticmethod
+    def date_from_unix_timestamp_seconds(unix_time: int) -> str:
+        # Unix時間をdatetimeオブジェクトに変換
+        dt_object = datetime.fromtimestamp(unix_time, Utils.JST)
+        # フォーマットに変換して返す
+        return dt_object.strftime('%Y/%m/%d')
+
+    @staticmethod
+    def date_from_str( date: str) -> str:
+        try:
+            sec = Utils.to_unix_timestamp_seconds( date, verbose=False )
+            if sec>0:
+                return Utils.date_from_unix_timestamp_seconds(sec)
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def date_today( days=0 ) -> str:
+        jdt = datetime.now().astimezone(Utils.JST)
+        if days != 0:
+            td = timedelta(days=days)
+            jdt = jdt + td
+        # 日時を指定されたフォーマットで表示
+        formatted = jdt.strftime(f"%Y/%m/%d")
+        return formatted
+
 
     @staticmethod
     def formatted_datetime():
