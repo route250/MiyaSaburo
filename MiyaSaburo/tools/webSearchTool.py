@@ -5,7 +5,7 @@ import re
 import traceback,logging
 import requests
 import lxml.html as html
-from lxml.html import HtmlElement, HtmlComment, TextareaElement, HtmlEntity
+from lxml.html import HtmlMixin, HtmlElement, HtmlComment, TextareaElement, HtmlEntity
 import urllib.parse
 from enum import Enum
 from pydantic import Field, BaseModel
@@ -162,7 +162,7 @@ class WebSearchModule:
                 zResult["snippet"] = content
                 metadata_result.append(zResult)
             # 特定の要素を選択して情報を取得する
-            zSegments = zDocument.xpath(".//div[div/div/a//h3]")
+            zSegments = zDocument.xpath(".//div[div/div/a//h3]|.//article[div/div/a//h3]")
             for zYahooNews in zSegments:
                 zAtags = zYahooNews.xpath(".//a[@href]")
                 if len(zAtags) == 0:
@@ -222,7 +222,7 @@ class WebSearchModule:
     XPATH_HTAG=".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"
     RE_H_MATCH = re.compile('^h[1-6]$')
             
-    def get_content(self, link: str, *, user_agent = None, timeout = None ) -> str:
+    def get_content(self, link: str, *, user_agent = None, timeout = None, type:str='htag' ) -> str:
         h_content = []
         try:
             user_agent = user_agent if user_agent else self.mUserAgent
@@ -234,41 +234,101 @@ class WebSearchModule:
                 f.write(response.content)
             if response.encoding is None or response.encoding=="ISO-8859-1":
                 response.encoding = "UTF-8"
-            return WebSearchModule.get_content_from_bytes( response.content, response.encoding )
+            return WebSearchModule.get_content_from_bytes( response.content, response.encoding, type=type )
         except Exception as e:
             logger.exception("")
         return ""
 
     @staticmethod
-    def get_content_from_bytes( b: bytes, encoding: str = "utf-8") -> str:
-        content = ""
+    def get_content_from_bytes( b: bytes, encoding: str = "utf-8",*, type:str='htag') -> str:
+        zDocument: HtmlElement = None
         try:
-            content = b.decode( encoding )
+            zDocument = html.fromstring(b)
         except:
-            try:
-                content = b.decode( "utf-8" )
-            except:
-                logger.exception("")
-                content = b.decode( "ISO-88591-1" )
-        return WebSearchModule.get_content_from_str(content)
+            zDocument = None
+        for enc in ["utf-8","cp932","iso-2022-jp","euc-jp"]:
+            if zDocument is None:
+                try:
+                    content = b.decode( enc )
+                    zDocument = html.fromstring(content,encoding=enc)
+                except:
+                    zDocument = None
+
+        if zDocument is None:
+            return None
+
+        return WebSearchModule.get_content_from_xxx(zDocument, type=type)
 
     @staticmethod
-    def get_content_from_str( content: str) -> str:
+    def get_content_from_str( content: str,*, type:str='htag') -> str:
+        zDocument: HtmlElement = html.fromstring(content)
+        return WebSearchModule.get_content_from_xxx(zDocument)
+
+    @staticmethod
+    def dump( e: HtmlElement ):
+        txt = html.unicode( html.tostring(e,encoding="utf8"), encoding="utf8" )
+        # if "エレベータ" in txt:
+        #     print( f"---DUMP---\n{txt}\n")
+
+    @staticmethod
+    def get_content_from_xxx( zDocument: HtmlElement,*, type:str='htag') -> str:
         h_content = []
         try:
-            zDocument = html.fromstring(content)
-            zMain = WebSearchModule._scan_main_content( zDocument )
-            # 特定の要素を選択して情報を取得する
-            h_tag: HtmlElement
-            for h_tag in zMain.xpath(WebSearchModule.XPATH_HTAG):
-                h_text = h_tag.text_content()
-                h_text = WebSearchModule.normalize(h_text)
-                ##print("----")
-                ##print(f"[DBG] {h_tag.tag} {WebSearchModule.dump_str(h_text)}")
-                text = WebSearchModule.get_next_content(h_tag,stop=True)
-                norm_text = WebSearchModule.normalize(text)
-                if len(norm_text)>0:
-                    h_content.append( norm_text )
+            ads_xpath = [
+                 "body//script[contains(@src,'googlesyndication')]",
+                 "body//a[contains(@href,'doubleclick.net')]",
+                 "body//a[contains(@href,'amazon')]",
+                ]
+            remove_xpath = [
+                 "//script","//style" #,"//comment()"
+                ]
+            deltag = {}
+            for xpath in ads_xpath:
+                for e1 in zDocument.xpath(xpath):
+                    WebSearchModule.dump(e1)
+                    parent = e1.getparent()
+                    parent.remove(e1)
+                    e2 = parent
+                    while e2 is not None:
+                        parent = e2.getparent()
+                        if parent is not None and e2.tag == "div":
+                            deltag[e2] = 1
+                            break
+                        e2 = parent
+            for e in deltag.keys():
+                WebSearchModule.dump(e)
+                try:
+                    e.getparent().remove(e)
+                except:
+                    pass
+
+            for xpath in remove_xpath:
+                for e in zDocument.xpath(xpath):
+                    WebSearchModule.dump(e)
+                    e.getparent().remove(e)
+
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/content-trim.html","wb") as f:
+                f.write( html.tostring(zDocument))
+            if type=='title':
+                zMain = WebSearchModule._scan_main_content_by_title( zDocument )
+                if zMain is not None:
+                    text = WebSearchModule.get_child_content(zMain)
+                    norm_text = WebSearchModule.normalize(text)
+                    if len(norm_text)>0:
+                        h_content.append( norm_text )
+            else:
+                zMain = WebSearchModule._scan_main_content_by_htag( zDocument )
+                if zMain is not None:
+                    # 特定の要素を選択して情報を取得する
+                    h_tag: HtmlElement
+                    for h_tag in zMain.xpath(WebSearchModule.XPATH_HTAG):
+                        h_text = h_tag.text_content()
+                        h_text = WebSearchModule.normalize(h_text)
+                        text = WebSearchModule.get_next_content(h_tag,stop=True)
+                        norm_text = WebSearchModule.normalize(text)
+                        if len(norm_text)>0:
+                            h_content.append( norm_text )
         except Exception as e:
             logger.exception("")
         return WebSearchModule.normalize("\n".join(h_content))
@@ -277,13 +337,13 @@ class WebSearchModule:
     # 配下のhタグが一番多いdivタグを探す
     # -----------------------------------------------------------------
     @staticmethod
-    def _scan_main_content( elem: HtmlElement) -> HtmlElement:
+    def _scan_main_content_by_htag( elem: HtmlElement) -> HtmlElement:
         zMap: dict[HtmlElement,int] = {}
         for h_tag in elem.xpath(WebSearchModule.XPATH_HTAG):
             e: HtmlElement = h_tag
             while e is not None:
                 try:
-                    if e.tag == "div":
+                    if e.tag == "div" or e.tag == "article":
                         count: int = zMap.get(e,0)
                         zMap[e] = count + 1
                         break
@@ -300,6 +360,189 @@ class WebSearchModule:
         return ret
 
     # -----------------------------------------------------------------
+    # titleが含まれるdivタグを探す
+    # -----------------------------------------------------------------
+    @staticmethod
+    def _scan_main_content_by_title( elem: HtmlElement ) -> HtmlElement:
+        title: str = ""
+        tags = elem.xpath("/html/head/title/text()")
+        if tags is not None and len(tags)>0:
+            title = str(tags[0])
+        zTarget: HtmlElement = WebSearchModule._get_element_by_content( elem, title )
+        if zTarget is None:
+            return None
+        print( f"タイトル:{title}\n選択されたタグ")
+        print( html.unicode( html.tostring(zTarget,encoding="utf8"), encoding="utf8" ) )
+
+        e = zTarget
+        p1 = e
+        p1000 = None
+        p2000 = None
+        minlen = len(title)+200
+        while e is not None:
+            p1 = e
+            txt = WebSearchModule.get_child_content(e)
+            size = len( txt )
+            if size > 2000:
+                p2000 = e
+                break
+            elif size > minlen:
+                p1000 = e
+            e = e.getparent()
+        if p1000 is not None:
+            return p1000
+        if p2000 is not None:
+            return p2000
+        return p1
+
+    @staticmethod
+    def _get_element_by_content( elem: HtmlElement, title: str ) -> HtmlElement:
+        if elem is None or title is None or len(title)<10:
+            return None
+        # タイトル文字列を含むタグを探す
+        zTagMap: dict[HtmlElement,int] = {}
+        step = 3
+        words = []
+        for i in range(0,len(title)):
+            key = title[i:i+step].strip()
+            if len(key)>0:
+                key=key.replace("&","&amp;")
+                key=key.replace("'","&quot;")
+                words.append(key)
+        for i in range(0,len(title),step+2):
+            key = title[i:i+step].strip()
+            if len(key)>0:
+                words.append(key)
+        for w in words:
+            for e0 in elem.xpath(f"/html/body//*[contains(text(),'{w}')]"):
+                e = e0 # WebSearchModule._popup(e0)
+                zTagMap[e] = zTagMap.get(e,0) + 1
+        if not zTagMap:
+            return None
+        count = len(words)*0.5
+        # スコアが高いのを選択
+        top = []
+        maxcount = 0
+        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        if maxcount<count:
+            return None
+        if len(top) == 1:
+            return top[0]
+
+        # 復数あったので、絞り込む
+        zTagMap = {}
+        for e in top:
+            e = WebSearchModule._popup(e)
+            ss = e.xpath("following-sibling::*")
+            nn = len(ss)
+            zTagMap[e] = nn
+        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        if len(top) == 1:
+            return top[0]
+
+        # 復数あったので、絞り込む
+        zTagMap = {}
+        for e in top:
+            pri = WebSearchModule.tag_pri(e)
+            zTagMap[e] = pri
+        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        if len(top) == 1:
+            return top[0]
+
+        maxcount = 0
+        sib = []
+        for e in top:
+            n = e.xpath("count(following-sibling::*)")
+            # pp = e.getparent()
+            # ptxt = WebSearchModule.get_child_content(pp)
+            # print(f"select:{n}\n{ptxt}\n\n\n")
+            if n>maxcount:
+                maxcount = n
+                sib = [ e ]
+            elif n == maxcount:
+                sib.append(e)
+        if len(sib) == 1:
+            return sib[0]
+
+        key = max(zTagMap, key=zTagMap.get)
+        if zTagMap[key]>count:
+            return key
+        return None
+
+    @staticmethod
+    def _maxscore( zTagMap: dict[HtmlElement:int]):
+        # スコアが高いのを選択
+        top = []
+        maxcount = 0
+        for e, n in zTagMap.items():
+            if n>maxcount:
+                maxcount = n
+                top = [ e ]
+            elif n == maxcount:
+                top.append(e)
+        return top, maxcount
+
+    @staticmethod
+    def tag_pri( elem: HtmlElement ) -> int:
+        while elem is not None:
+            tag = elem.tag.lower()
+            if "article"==tag:
+                return 10
+            elif "h1"==tag:
+                return 9
+            elif "h2"==tag:
+                return 8
+            elif "h3"==tag:
+                return 7
+            elif "h4"==tag:
+                return 6
+            elif "h5"==tag:
+                return 5
+            elif "h6"==tag:
+                return 4
+            elif "div"==tag:
+                return 3
+            elif "span"==tag:
+                return 2
+            elem = elem.getparent()
+        return 0
+    @staticmethod
+    def _popup( elem: HtmlElement ):
+        e: HtmlElement = elem
+        #size = len(WebSearchModule.get_child_content(e).strip())
+        size = len(e.text_content().strip())
+        parent: HtmlElement = e.getparent()
+        while parent is not None:
+            l = len(parent.text_content().strip())
+            if size<l:
+                break
+            size = l
+            e = parent
+            parent = e.getparent()
+        return e
+
+
+    @staticmethod
+    def _axdepth( elem, limit ):
+        e = elem
+        ret = 0
+        while e is not None:
+            txt = WebSearchModule.get_child_content(e)
+            size = len(txt)
+            if size> limit:
+                break
+            ret += 1
+            e = e.getparent()
+        return ret
+
+    @staticmethod
+    def get_depth(element):
+        depth = 0
+        while element.getparent() is not None:
+            depth += 1
+            element = element.getparent()
+        return depth
+    # -----------------------------------------------------------------
     # blockタグか？
     # -----------------------------------------------------------------
     @staticmethod
@@ -313,24 +556,43 @@ class WebSearchModule:
         return False
 
     # -----------------------------------------------------------------
+    # テキスト化する
+    # -----------------------------------------------------------------
+    @staticmethod
+    def get_child_content( elem: HtmlElement ) -> str:
+        tag_list = elem.xpath("text()|*")
+        return WebSearchModule.__get_next_content( tag_list, stop=False )
+    
+    # -----------------------------------------------------------------
     # elemとその次のエレメントをテキスト化する
     # -----------------------------------------------------------------
     @staticmethod
     def get_next_content( elem, stop=False ) -> str:
+        tag_list = elem.xpath(".|following-sibling::*|following-sibling::text()")
+        return WebSearchModule.__get_next_content( tag_list, stop=stop, elem=elem )
+
+    # -----------------------------------------------------------------
+    # elemとその次のエレメントをテキスト化する
+    # -----------------------------------------------------------------
+    @staticmethod
+    def __get_next_content( tag_list, stop=False, elem=None ) -> str:
         text_list=[]
         buffer = ""
-        next_tag_list = elem.xpath(".|following-sibling::*|following-sibling::text()")
-        for next_tag in next_tag_list:
-            if isinstance( next_tag, HtmlElement ):
-                if elem != next_tag and stop and WebSearchModule.RE_H_MATCH.match( str(next_tag.tag) ):
+        for next_tag in tag_list:
+            if isinstance( next_tag, HtmlMixin ):
+                if stop and elem != next_tag and WebSearchModule.RE_H_MATCH.match( str(next_tag.tag) ):
                     break
                 if isinstance( next_tag, HtmlComment ):
+                    t = next_tag.text_content()
+                    if "場合はここ" in t:
+                        print(f"comment {t}")
                     continue
-                child_list = next_tag.getchildren()
-                if len(child_list)>0:
-                    text = WebSearchModule.get_next_content( child_list[0] )
-                else:
-                    text = next_tag.text_content()
+                #child_list = next_tag.getchildren()
+                #if len(child_list)>0:
+                #    text = WebSearchModule.get_next_content( child_list[0] )
+                #else:
+                #    text = next_tag.text_content()
+                text = WebSearchModule.get_child_content( next_tag )
                 text = WebSearchModule.normalize( text )
                 if "a" == next_tag.tag:
                     href = next_tag.attrib.get("href",None)
@@ -347,7 +609,7 @@ class WebSearchModule:
                     text_list.append(text)
                 else:
                     if len(text)>0:
-                        buffer = f"{buffer} {text}"
+                        buffer = f"{buffer} {text}".strip()
             else:
                 text = WebSearchModule.normalize( str(next_tag) )
                 re11 = r"^[\r\n\t ]*"
@@ -426,8 +688,29 @@ def test():
         text = module.get_content( d['link'] )
         print(text)
 
+def xtest():
+    module : WebSearchModule = WebSearchModule()
+
+    # とあるビルにて「何階に行くの？」「3階ニャ！」猫が ... - カラパイア https://karapaia.com/archives/52324809.html
+    #site_link="https://karapaia.com/archives/52324809.html"
+
+    # 扇風機大好き少年の夢をかなえるために→「ねこ型扇風機」のクラファンが話題　デザインは兄、鳴き声は猫……家族みんなで形に - ねとらぼ
+    # site_link="https://nlab.itmedia.co.jp/nl/articles/2306/11/news016.html"
+
+    # 最新猫ニュース2023年5月12日【感動の再会】米国サウスカロライナ州で飼い猫が行方不明になってしまう→10年ぶりに発見されて身元が判明by Cat Press編集部
+    #site_link="https://cat-press.com/cat-news/reunited-after-10-years"
+
+    #2023'「長崎県の保護犬保護猫ビフォーアフター展」（佐世保市後援） https://www.city.sasebo.lg.jp/hokenhukusi/seikat/2023_dog_cat_before_after.html
+    site_link = "https://www.city.sasebo.lg.jp/hokenhukusi/seikat/2023_dog_cat_before_after.html"
+
+    # 「自動改札機」の上でぐっすり眠る猫が話題 まったく起きない様子 ... https://news.yahoo.co.jp/articles/25303952d13383fc45e501c1c3a45a467ad0d53f
+    site_link = "https://news.yahoo.co.jp/articles/25303952d13383fc45e501c1c3a45a467ad0d53f"
+    #---
+    site_text = module.get_content( site_link, type="title" )
+    print( f"{site_text}" )
+
 def main(argv):
-    test()
+    xtest()
     
 def main2(argv):
     module = WebSearchModule()

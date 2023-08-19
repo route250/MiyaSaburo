@@ -23,7 +23,7 @@ def fsplit_contents( text_all, split_size=2000, oerlap=200 ):
         p = p + step - overlap
     return results
 
-def main():
+def neko_neko_network():
     #baselist=["猫が迷子","猫が行方不明","猫が家出","猫が帰ってきました","猫を探して"]
     #base_emg_list  = to_embedding(baselist)
     
@@ -125,6 +125,33 @@ def main():
             print("\n\n")
             print(info)
 
+def neko_news():
+    
+    module : WebSearchModule = WebSearchModule()
+    dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
+
+    dates = "2023/8/12"
+    query = f"猫の話題 after: {dates}"
+
+
+    n_return = 10
+    search_results = module.search_meta( query, num_result = n_return )
+    print( f"result:{len(search_results)}")
+
+    for d in search_results:
+        site_title = d.get('title',"")
+        site_link = d.get('link',"")
+        if len(site_title)==0 or len(site_link)==0:
+            continue
+        if "youtube.com" in site_link:
+            continue
+        print("----------------------------------------------")
+        print( f"{site_title} {site_link}")
+        site_text = module.get_content( site_link, type="title" )
+        if site_text is None:
+            continue
+        print( f"{site_text}" )
+
 def test():
     s = "2023-0a8-10"
     ss = Utils.date_from_str(s)
@@ -138,5 +165,6 @@ def test():
 
 if __name__ == '__main__':
     #sys.exit(main(sys.argv))
-    main()
+    #xtest()
+    neko_news()
     #test()
