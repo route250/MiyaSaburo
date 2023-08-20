@@ -232,8 +232,6 @@ class WebSearchModule:
             os.makedirs("logs", exist_ok=True)
             with open("logs/content.html","wb") as f:
                 f.write(response.content)
-            if response.encoding is None or response.encoding=="ISO-8859-1":
-                response.encoding = "UTF-8"
             return WebSearchModule.get_content_from_bytes( response.content, response.encoding, type=type )
         except Exception as e:
             logger.exception("")
@@ -241,18 +239,31 @@ class WebSearchModule:
 
     @staticmethod
     def get_content_from_bytes( b: bytes, encoding: str = "utf-8",*, type:str='htag') -> str:
+        content = None
+        min_count = len(b)+1
+        for enc in ["utf-8","cp932","iso-2022-jp","euc-jp"]:
+            try:
+                txt = b.decode( enc, errors="backslashreplace" )
+                if txt is None or len(txt)==0:
+                    continue
+                count = txt.count('\\')
+                if count < min_count:
+                    content = txt
+                    min_count = count
+            except:
+                logger.exception(f"encoding:{encoding}")
+        if content is None:
+            return None
+
         zDocument: HtmlElement = None
         try:
-            zDocument = html.fromstring(b)
+            zDocument = html.fromstring(content)
         except:
-            zDocument = None
-        for enc in ["utf-8","cp932","iso-2022-jp","euc-jp"]:
-            if zDocument is None:
-                try:
-                    content = b.decode( enc )
-                    zDocument = html.fromstring(content,encoding=enc)
-                except:
-                    zDocument = None
+            try:
+                zDocument = html.fromstring(b)
+            except:
+                logger.exception(f"encoding:{encoding}")
+                zDocument = None
 
         if zDocument is None:
             return None
@@ -280,7 +291,8 @@ class WebSearchModule:
                  "body//a[contains(@href,'amazon')]",
                 ]
             remove_xpath = [
-                 "//script","//style" #,"//comment()"
+                ".//head/meta", ".//head/comment()", ".//head/link",
+                 ".//script",".//style", ".//svg", ".//comment()",
                 ]
             deltag = {}
             for xpath in ads_xpath:
@@ -296,23 +308,18 @@ class WebSearchModule:
                             break
                         e2 = parent
             for e in deltag.keys():
-                WebSearchModule.dump(e)
-                try:
-                    e.getparent().remove(e)
-                except:
-                    pass
-
+                clear_tag(e)
             for xpath in remove_xpath:
                 for e in zDocument.xpath(xpath):
-                    WebSearchModule.dump(e)
-                    e.getparent().remove(e)
-
+                    clear_tag(e)
+            remove_ads(zDocument)
             os.makedirs("logs", exist_ok=True)
             with open("logs/content-trim.html","wb") as f:
                 f.write( html.tostring(zDocument))
             if type=='title':
-                zMain = WebSearchModule._scan_main_content_by_title( zDocument )
+                zMain = scan_main_content_by_title( zDocument )
                 if zMain is not None:
+                    remove_ads(zDocument)
                     text = WebSearchModule.get_child_content(zMain)
                     norm_text = WebSearchModule.normalize(text)
                     if len(norm_text)>0:
@@ -371,8 +378,8 @@ class WebSearchModule:
         zTarget: HtmlElement = WebSearchModule._get_element_by_content( elem, title )
         if zTarget is None:
             return None
-        print( f"タイトル:{title}\n選択されたタグ")
-        print( html.unicode( html.tostring(zTarget,encoding="utf8"), encoding="utf8" ) )
+        # print( f"タイトル:{title}\n選択されたタグ")
+        # print( html.unicode( html.tostring(zTarget,encoding="utf8"), encoding="utf8" ) )
 
         e = zTarget
         p1 = e
@@ -423,7 +430,7 @@ class WebSearchModule:
         # スコアが高いのを選択
         top = []
         maxcount = 0
-        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        top, maxcount = maxscore(zTagMap)
         if maxcount<count:
             return None
         if len(top) == 1:
@@ -436,16 +443,16 @@ class WebSearchModule:
             ss = e.xpath("following-sibling::*")
             nn = len(ss)
             zTagMap[e] = nn
-        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        top, maxcount = maxscore(zTagMap)
         if len(top) == 1:
             return top[0]
 
         # 復数あったので、絞り込む
         zTagMap = {}
         for e in top:
-            pri = WebSearchModule.tag_pri(e)
+            pri = tag_pri(e)
             zTagMap[e] = pri
-        top, maxcount = WebSearchModule._maxscore(zTagMap)
+        top, maxcount = maxscore(zTagMap)
         if len(top) == 1:
             return top[0]
 
@@ -468,59 +475,6 @@ class WebSearchModule:
         if zTagMap[key]>count:
             return key
         return None
-
-    @staticmethod
-    def _maxscore( zTagMap: dict[HtmlElement:int]):
-        # スコアが高いのを選択
-        top = []
-        maxcount = 0
-        for e, n in zTagMap.items():
-            if n>maxcount:
-                maxcount = n
-                top = [ e ]
-            elif n == maxcount:
-                top.append(e)
-        return top, maxcount
-
-    @staticmethod
-    def tag_pri( elem: HtmlElement ) -> int:
-        while elem is not None:
-            tag = elem.tag.lower()
-            if "article"==tag:
-                return 10
-            elif "h1"==tag:
-                return 9
-            elif "h2"==tag:
-                return 8
-            elif "h3"==tag:
-                return 7
-            elif "h4"==tag:
-                return 6
-            elif "h5"==tag:
-                return 5
-            elif "h6"==tag:
-                return 4
-            elif "div"==tag:
-                return 3
-            elif "span"==tag:
-                return 2
-            elem = elem.getparent()
-        return 0
-    @staticmethod
-    def _popup( elem: HtmlElement ):
-        e: HtmlElement = elem
-        #size = len(WebSearchModule.get_child_content(e).strip())
-        size = len(e.text_content().strip())
-        parent: HtmlElement = e.getparent()
-        while parent is not None:
-            l = len(parent.text_content().strip())
-            if size<l:
-                break
-            size = l
-            e = parent
-            parent = e.getparent()
-        return e
-
 
     @staticmethod
     def _axdepth( elem, limit ):
@@ -583,9 +537,6 @@ class WebSearchModule:
                 if stop and elem != next_tag and WebSearchModule.RE_H_MATCH.match( str(next_tag.tag) ):
                     break
                 if isinstance( next_tag, HtmlComment ):
-                    t = next_tag.text_content()
-                    if "場合はここ" in t:
-                        print(f"comment {t}")
                     continue
                 #child_list = next_tag.getchildren()
                 #if len(child_list)>0:
@@ -623,7 +574,297 @@ class WebSearchModule:
             buffer = ""
         return "\n".join(text_list)
 
+#------------------------------------------------------------------------------
+# clear tags
+#------------------------------------------------------------------------------
+def clear_tag( elem ):
+    try:
+        if elem is not None:
+            for child in list(elem):
+                elem.remove(child)
+            elem.attrib.clear()
+            elem.text = None
+    except:
+        logger.exception("")
+    return elem
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def pop_tag( elem: HtmlElement ):
+    tag: HtmlElement = elem
+    size = len(tag.text_content().strip())
+    parent: HtmlElement = tag.getparent()
+    while parent is not None:
+        l = len(parent.text_content().strip())
+        if size<l:
+            break
+        size = l
+        tag = parent
+        parent = tag.getparent()
+    return tag
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def get_first( list: list[HtmlElement] ) -> HtmlElement:
+    if list is None or len(list)==0:
+        return None
+    return list[0]
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def get_first_by_xpath( elem: HtmlElement, xpath: str ) -> HtmlElement:
+    try:
+        return get_first( elem.xpath( xpath ))
+    except:
+        logger.exception(f"xpath:{xpath}")
+    return None
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def get_div_tag( elem: HtmlElement ) -> list[HtmlElement]:
+    try:
+        result: list[HtmlElement] = []
+        div_list: list[HtmlElement] = elem.xpath( ".//div|.//span|.//section|.//ul|.//ol|.//td" )
+        for div in div_list:
+            childs = div.xpath( ".//div|.//span|.//section|.//ul|.//ol|.//td")
+            if childs is None or len(childs)==0:
+                result.append(div)
+        return result
+    except:
+        pass
+    return []
+
+#------------------------------------------------------------------------------
+# parentの子孫にchildが存在するか？
+# childはparentの子孫か？
+#------------------------------------------------------------------------------
+def is_child( parent: HtmlElement, child: HtmlElement ) -> bool:
+    if parent is None or child is None or parent == child:
+        return False
+    child = child.getparent()
+    while child is not None:
+        if parent == child:
+            return True
+        child = child.getparent()
+    return False    
+        
+#------------------------------------------------------------------------------
+# dictのキーが他のキーの子供なら削除する
+#------------------------------------------------------------------------------
+def uniq_tag( map: dict ) -> dict:
+    list = [ x for x in map.keys()]
+    for tag in list:
+        tag = tag.getparent()
+        while tag is not None:
+            if tag in map:
+                break
+            tag = tag.getparent()
+        if tag is not None:
+            del map[tag]
+    return map
+
+#------------------------------------------------------------------------------
+# スコアが高いものを選択
+#------------------------------------------------------------------------------
+def maxscore( zTagMap: dict[HtmlElement:int]):
+    # スコアが高いのを選択
+    top = []
+    maxcount = 0
+    for e, n in zTagMap.items():
+        if n>maxcount:
+            maxcount = n
+            top = [ e ]
+        elif n == maxcount:
+            top.append(e)
+    return top, maxcount
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def strip_ads( text: str ) -> str:
+    if text is None or len(text)==0:
+            return ""
+    text = text.strip()
+    text = text.replace('\xa0',' ')
+    text = text.replace("»"," ")
+    text = re.sub( r"[ 0-9]+年[ 0-9]+月[ 0-9]+日[ ]*"," ",text)
+    text = re.sub( r"[\r\n\t ]+"," ",text)
+    return text
+
+#------------------------------------------------------------------------------
+# 広告タグを取得する
+#------------------------------------------------------------------------------
+def get_advertising_tag( elem: HtmlElement ) -> list[HtmlElement]:
+    try:
+        result: dict[HtmlElement,float] = {}
+        div_list = elem.xpath( ".//div|.//span|.//section|.//ul|.//ol|.//table|.//tr|.//td" )
+        for div in div_list:
+
+            div_txt = strip_ads( div.text_content() )
+            l1 = len( div_txt )
+            if l1<10:
+                continue
+            l2 = 0
+            for a in div.xpath(".//a"):
+                a_txt = strip_ads( a.text_content() )
+                l2 = l2 + len(a_txt) + 1
+            rate = l2/l1
+
+            if rate>0.8:
+                tag = pop_tag(div)
+                result[tag] = rate
+
+        uniq_tag( result )
+        return [ x for x in result.keys()]
+    except:
+        logger.exception("error")
+        pass
+    return []
+
+#------------------------------------------------------------------------------
+# タグ名による優先度
+#------------------------------------------------------------------------------
+def tag_pri( elem: HtmlElement ) -> int:
+    while elem is not None:
+        tag = elem.tag.lower()
+        if "article"==tag:
+            return 10
+        elif "h1"==tag:
+            return 9
+        elif "h2"==tag:
+            return 8
+        elif "h3"==tag:
+            return 7
+        elif "h4"==tag:
+            return 6
+        elif "h5"==tag:
+            return 5
+        elif "h6"==tag:
+            return 4
+        elif "div"==tag:
+            return 3
+        elif "span"==tag:
+            return 2
+        elem = elem.getparent()
+    return 0
+
+#------------------------------------------------------------------------------
+# titleが含まれるdivタグを探す
+#------------------------------------------------------------------------------
+def scan_main_content_by_title( elem: HtmlElement ) -> HtmlElement:
+
+    title_tag = get_title_tag( elem )
+    if title_tag is None:
+        return None
+
+    title = title_tag.text_content().strip()
+    print( f"タイトル:{title}\n選択されたタグ")
+    print( html.unicode( html.tostring(title_tag,encoding="utf8"), encoding="utf8" ) )
+
+    e = title_tag
+    p1 = e
+    p1000 = None
+    p2000 = None
+    minlen = len(title)+200
+    while e is not None:
+        p1 = e
+        txt = e.text_content().strip()
+        size = len( txt )
+        if size > 2000:
+            p2000 = e
+            break
+        elif size > minlen:
+            p1000 = e
+        e = e.getparent()
+    if p1000 is not None:
+        return p1000
+    if p2000 is not None:
+        return p2000
+    return p1
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def get_title_tag( html: HtmlElement ) -> list[HtmlElement]:
+    # headerからタイトル
+    tags = get_first_by_xpath( html, "/html/head/title")
+    if tags is None:
+        return None
+    title: str = tags.text_content().strip()
+    if len(title)==0:
+        return None
+    # タイトル文字列を含むタグを探す
+    step = 3
+    word_list = []
+    for i in range(0,len(title)):
+        key = title[i:i+step].strip()
+        if len(key)>0:
+            key=key.replace("&","&amp;")
+            key=key.replace("'","&quot;")
+            word_list.append(key)
+    for i in range(0,len(title),step+2):
+        key = title[i:i+step].strip()
+        if len(key)>0:
+            word_list.append(key)
+
+    zTagMap: dict[HtmlElement,int] = {}
+    for w in word_list:
+        for e in html.xpath(f"/html/body//*[contains(text(),'{w}')]"):
+            zTagMap[e] = zTagMap.get(e,0) + 1
+    if not zTagMap:
+        return None
+    count = len(word_list)*0.5
+    # スコアが高いのを選択
+    title_tags, score = maxscore(zTagMap)
+    if score<count:
+        return None
+
+    title_tags = [ pop_tag(e) for e in title_tags ]
+    
+    if len(title_tags)==1:
+        return title_tags[0]
+    
+    # 広告タグを除外
+    x_title_tags = title_tags
+    ads_tags = get_advertising_tag( html )
+    for ad in ads_tags:
+        x_title_tags = [ x for x in x_title_tags if not is_child(ad,x)]
+
+    if len(x_title_tags)==1:
+        return x_title_tags[0]
+    if len(x_title_tags)>0:
+        title_tags = x_title_tags
+
+    # タグ名で除外
+    zTagMap = {}
+    for e in title_tags:
+        pri = tag_pri(e)
+        zTagMap[e] = pri
+    title_tags, maxcount = maxscore(zTagMap)
+    if len(title_tags) == 1:
+        return title_tags[0]
+
+    return title_tags[0]
+
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def remove_ads( elem: HtmlElement ):
+    ads_tags = get_advertising_tag( elem )
+    for tag in ads_tags:
+        clear_tag(tag)
+        try:
+            tag.getparent().remove(tag)
+        except:
+            pass
+
+#------------------------------------------------------------------------------
 # Toolの入力パラメータを定義するモデル
+#------------------------------------------------------------------------------
 class WebSearchInput(BaseModel):
     query: str = Field( '', description='query for google search')
 
@@ -692,20 +933,25 @@ def xtest():
     module : WebSearchModule = WebSearchModule()
 
     # とあるビルにて「何階に行くの？」「3階ニャ！」猫が ... - カラパイア https://karapaia.com/archives/52324809.html
-    #site_link="https://karapaia.com/archives/52324809.html"
+    site_link="https://karapaia.com/archives/52324809.html"
 
     # 扇風機大好き少年の夢をかなえるために→「ねこ型扇風機」のクラファンが話題　デザインは兄、鳴き声は猫……家族みんなで形に - ねとらぼ
-    # site_link="https://nlab.itmedia.co.jp/nl/articles/2306/11/news016.html"
+    #site_link="https://nlab.itmedia.co.jp/nl/articles/2306/11/news016.html"
 
     # 最新猫ニュース2023年5月12日【感動の再会】米国サウスカロライナ州で飼い猫が行方不明になってしまう→10年ぶりに発見されて身元が判明by Cat Press編集部
-    #site_link="https://cat-press.com/cat-news/reunited-after-10-years"
+    site_link="https://cat-press.com/cat-news/reunited-after-10-years"
 
     #2023'「長崎県の保護犬保護猫ビフォーアフター展」（佐世保市後援） https://www.city.sasebo.lg.jp/hokenhukusi/seikat/2023_dog_cat_before_after.html
-    site_link = "https://www.city.sasebo.lg.jp/hokenhukusi/seikat/2023_dog_cat_before_after.html"
+    #site_link = "https://www.city.sasebo.lg.jp/hokenhukusi/seikat/2023_dog_cat_before_after.html"
 
     # 「自動改札機」の上でぐっすり眠る猫が話題 まったく起きない様子 ... https://news.yahoo.co.jp/articles/25303952d13383fc45e501c1c3a45a467ad0d53f
-    site_link = "https://news.yahoo.co.jp/articles/25303952d13383fc45e501c1c3a45a467ad0d53f"
+    #site_link = "https://news.yahoo.co.jp/articles/25303952d13383fc45e501c1c3a45a467ad0d53f"
     #---
+
+    #飼い猫の1日の行動を首輪で追跡｢Catlog｣の凄み 犬に比べると｢猫は ... https://toyokeizai.net/articles/-/462291%3Fdisplay%3Db
+    #site_link = "https://toyokeizai.net/articles/-/462291%3Fdisplay%3Db"
+    #｢お洒落な人は犬派に多い｣猫好きが知らない真実 定点調査で検証｢犬 ... https://toyokeizai.net/articles/-/644505%3Fdisplay%3Db
+    
     site_text = module.get_content( site_link, type="title" )
     print( f"{site_text}" )
 

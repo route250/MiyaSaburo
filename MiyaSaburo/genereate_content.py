@@ -33,7 +33,6 @@ def neko_neko_network():
     query = f"( 猫 OR ねこ OR ネコ) ( 迷子 OR 脱走 OR 行方不明 )"
     query = f"( 猫 OR ねこ OR ネコ) ( 迷子 OR 脱走 OR 行方不明 ) ( {' OR '.join(dates)} )"
 
-
     n_return = 10
     search_results = module.search_meta( query, num_result = n_return )
     print( f"result:{len(search_results)}")
