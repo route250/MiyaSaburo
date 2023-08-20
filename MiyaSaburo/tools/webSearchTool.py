@@ -297,7 +297,6 @@ class WebSearchModule:
             deltag = {}
             for xpath in ads_xpath:
                 for e1 in zDocument.xpath(xpath):
-                    WebSearchModule.dump(e1)
                     parent = e1.getparent()
                     parent.remove(e1)
                     e2 = parent
@@ -312,14 +311,16 @@ class WebSearchModule:
             for xpath in remove_xpath:
                 for e in zDocument.xpath(xpath):
                     clear_tag(e)
-            remove_ads(zDocument)
+            ads_remove_tags(zDocument)
+
             os.makedirs("logs", exist_ok=True)
             with open("logs/content-trim.html","wb") as f:
                 f.write( html.tostring(zDocument))
+
             if type=='title':
                 zMain = scan_main_content_by_title( zDocument )
                 if zMain is not None:
-                    remove_ads(zDocument)
+                    ads_remove_tags(zDocument)
                     text = WebSearchModule.get_child_content(zMain)
                     norm_text = WebSearchModule.normalize(text)
                     if len(norm_text)>0:
@@ -683,49 +684,6 @@ def maxscore( zTagMap: dict[HtmlElement:int]):
     return top, maxcount
 
 #------------------------------------------------------------------------------
-#
-#------------------------------------------------------------------------------
-def strip_ads( text: str ) -> str:
-    if text is None or len(text)==0:
-            return ""
-    text = text.strip()
-    text = text.replace('\xa0',' ')
-    text = text.replace("»"," ")
-    text = re.sub( r"[ 0-9]+年[ 0-9]+月[ 0-9]+日[ ]*"," ",text)
-    text = re.sub( r"[\r\n\t ]+"," ",text)
-    return text
-
-#------------------------------------------------------------------------------
-# 広告タグを取得する
-#------------------------------------------------------------------------------
-def get_advertising_tag( elem: HtmlElement ) -> list[HtmlElement]:
-    try:
-        result: dict[HtmlElement,float] = {}
-        div_list = elem.xpath( ".//div|.//span|.//section|.//ul|.//ol|.//table|.//tr|.//td" )
-        for div in div_list:
-
-            div_txt = strip_ads( div.text_content() )
-            l1 = len( div_txt )
-            if l1<10:
-                continue
-            l2 = 0
-            for a in div.xpath(".//a"):
-                a_txt = strip_ads( a.text_content() )
-                l2 = l2 + len(a_txt) + 1
-            rate = l2/l1
-
-            if rate>0.8:
-                tag = pop_tag(div)
-                result[tag] = rate
-
-        uniq_tag( result )
-        return [ x for x in result.keys()]
-    except:
-        logger.exception("error")
-        pass
-    return []
-
-#------------------------------------------------------------------------------
 # タグ名による優先度
 #------------------------------------------------------------------------------
 def tag_pri( elem: HtmlElement ) -> int:
@@ -830,7 +788,7 @@ def get_title_tag( html: HtmlElement ) -> list[HtmlElement]:
     
     # 広告タグを除外
     x_title_tags = title_tags
-    ads_tags = get_advertising_tag( html )
+    ads_tags = ads_get_tags( html )
     for ad in ads_tags:
         x_title_tags = [ x for x in x_title_tags if not is_child(ad,x)]
 
@@ -851,16 +809,60 @@ def get_title_tag( html: HtmlElement ) -> list[HtmlElement]:
     return title_tags[0]
 
 #------------------------------------------------------------------------------
-#
+# 広告除去
 #------------------------------------------------------------------------------
-def remove_ads( elem: HtmlElement ):
-    ads_tags = get_advertising_tag( elem )
+def ads_remove_tags( elem: HtmlElement ):
+    ads_tags = ads_get_tags( elem )
     for tag in ads_tags:
         clear_tag(tag)
         try:
             tag.getparent().remove(tag)
         except:
             pass
+#------------------------------------------------------------------------------
+#
+#------------------------------------------------------------------------------
+def ads_strip( text: str ) -> str:
+    if text is None or len(text)==0:
+            return ""
+    text = text.strip()
+    text = text.replace('\xa0',' ')
+    text = text.replace("»"," ")
+    text = re.sub( r"[ 0-9]+年[ 0-9]+月[ 0-9]+日[ ]*"," ",text)
+    text = re.sub( r"[\r\n\t ]+"," ",text)
+    text = re.sub( r"[*＊ ][*＊ ][*＊ ]+","***", text)
+    text = re.sub( r"[-= ][-= ][-= ]+","---", text)
+    return text
+#------------------------------------------------------------------------------
+# 広告タグを取得する
+#------------------------------------------------------------------------------
+def ads_get_tags( elem: HtmlElement ) -> list[HtmlElement]:
+    try:
+        result: dict[HtmlElement,float] = {}
+        div_list = elem.xpath( ".//div|.//span|.//section|.//ul|.//ol|.//table|.//tr|.//td" )
+        for div in div_list:
+
+            div_txt = ads_strip( div.text_content() )
+            l1 = len( div_txt )
+            if l1<10:
+                continue
+            l2 = 0
+            for a in div.xpath(".//a"):
+                a_txt = ads_strip( a.text_content() )
+                l2 = l2 + len(a_txt) + 1
+            rate = l2/l1
+
+            if rate>0.8:
+                tag = pop_tag(div)
+                result[tag] = rate
+
+        uniq_tag( result )
+        return [ x for x in result.keys()]
+    except:
+        logger.exception("error")
+        pass
+    return []
+
 
 #------------------------------------------------------------------------------
 # Toolの入力パラメータを定義するモデル

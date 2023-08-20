@@ -1,5 +1,8 @@
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
+import requests
+from PIL import Image
+from io import BytesIO
 from tools.webSearchTool import WebSearchModule
 from libs.utils import Utils
 
@@ -135,7 +138,7 @@ def neko_news():
 
     n_return = 10
     search_results = module.search_meta( query, num_result = n_return )
-    print( f"result:{len(search_results)}")
+    # print( f"result:{len(search_results)}")
 
     for d in search_results:
         site_title = d.get('title',"")
@@ -144,12 +147,76 @@ def neko_news():
             continue
         if "youtube.com" in site_link:
             continue
-        print("----------------------------------------------")
-        print( f"{site_title} {site_link}")
+
         site_text = module.get_content( site_link, type="title" )
         if site_text is None:
             continue
-        print( f"{site_text}" )
+
+        prompt1 = "URL:{site_link}\nTITLE:{site_title}"
+        prompt1 = f"{prompt1}\n\n記事内容\n{site_text[:2000]}"
+        prompt1 = f"{prompt1}\n\上記のネット記事から、タイトル「{site_title}」に関係ない部分を削除して下さい。\n"
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": prompt1 },
+            ],
+        )
+
+        base_article = response.choices[0]["message"]["content"].strip()
+        # print( f"{base_article}" )
+
+        prompt1 = "URL:{site_link}\nTITLE:{site_title}"
+        prompt1 = f"{prompt1}\n\n記事内容\n{base_article[:2000]}"
+        prompt1 = f"{prompt1}\n\野良猫がこのニュースを読んだときの反応は？"
+        prompt1 = f"{prompt1}\n【チャットボットの現在の感情パラメーター】"
+        prompt1 = f"{prompt1}\n喜び:0〜5\n怒り:0〜5\n悲しみ:0〜5\n楽しさ:0〜5\n自信:0〜5\n困惑:0〜5\n恐怖:0〜5"
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": prompt1 },
+            ],
+        )
+
+        param = response.choices[0]["message"]["content"].strip()
+        prompt2 = "野良猫がこの記事の紹介をツイートするセリフを生成して下さい\n"
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": prompt1 },
+                {"role": "assistant", "content": param },
+                {"role": "user", "content": prompt2 },
+            ],
+        )
+        article_text = response.choices[0]["message"]["content"].strip()
+
+        print("----------------------------------------------")
+        print( f"{article_text}" )
+        print( f"ニュース：{site_title} {site_link}")
+        print("----------------------------------------------")
+
+# DALL-Eによる画像生成
+def generate_image(prompt):
+    response = openai.Image.create(
+        model="image-alpha-001",
+        prompt=prompt,
+        n=1,
+        size="256x256",
+        response_format="url"
+    )
+
+    image_url = response['data'][0]['url']
+    # 画像を表示
+    response = requests.get(image_url)
+    img = Image.open(BytesIO(response.content))
+    return img
+
+def img_test():
+    # 赤いリンゴの画像を生成
+    image = generate_image("「にゃん！最新の猫ニュースを見つけたニャ！黒猫が墨汁に擬態してるニャんて！驚きの美しさににゃんとも言えないニャ！ぜひみんなに知らせたいニャ！😺📰🖤 #猫ニュース #ニャンモナイト」ニュース：猫は液体→では黒猫が液体化すると…？なんと墨汁になることが")
+    image.show()
 
 def test():
     s = "2023-0a8-10"
@@ -166,4 +233,5 @@ if __name__ == '__main__':
     #sys.exit(main(sys.argv))
     #xtest()
     neko_news()
+    #img_test()
     #test()
