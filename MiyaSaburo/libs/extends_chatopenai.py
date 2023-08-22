@@ -29,7 +29,7 @@ class ExChatOpenAI(ChatOpenAI):
                         break
                     except JSONDecodeError:
                         print( f"ERROR: function {function_name}  {function_args} ")
-                        tmp_messages = messages + [ message, FunctionMessage(f"Could not parse JSON: {function_args}") ]
+                        tmp_messages = messages + [ message, FunctionMessage( name=function_name, content=f"Could not parse JSON: {function_args}") ]
             else:
                 break
         return message
