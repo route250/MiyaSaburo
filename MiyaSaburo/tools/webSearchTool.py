@@ -80,10 +80,10 @@ class WebSearchModule:
             logger.exception("")
         return txt
 
-    def search_snippet(self, query: str, *,num_result=None) -> str:
+    def search_snippet(self, query: str, *,num_result=None,qdr=None) -> str:
         """Run query through GoogleSearch and parse result."""
         snippets = []
-        results = self.search_meta(query, num_result=num_result)
+        results = self.search_meta(query, num_result=num_result,qdr=qdr)
         if len(results) == 0:
             return "No good Google Search Result was found"
         for result in results:
@@ -127,7 +127,9 @@ class WebSearchModule:
             logger.exception("")
         return ""
 
-    def search_meta(self,aQuery, *, num_result=None, user_agent = None, timeout = None) -> list[dict]:
+    def search_meta(self,aQuery, *, num_result: int=None, qdr: str = "m1", user_agent = None, timeout = None) -> list[dict]:
+        
+        # qdrは期間指定 1ヶ月 m1 48時間 h48
 
         num_result = num_result if num_result else WebSearchModule.DEFAULT_NUM_RESULT
         metadata_result = []
@@ -138,8 +140,8 @@ class WebSearchModule:
         zEncQuery = WebSearchModule.urlEncode(aQuery)
         #zURL = mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&gl=us&hl=en"
         zURL = WebSearchModule.mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&hl=en"
-        if num_result:
-            zURL += f"&tbs=qdr:{num_result*2}"
+        if qdr:
+            zURL += f"&tbs=qdr:{qdr}"
 
         try:
             # requestsを使用してWebページを取得
@@ -221,14 +223,19 @@ class WebSearchModule:
 
     XPATH_HTAG=".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"
     RE_H_MATCH = re.compile('^h[1-6]$')
-            
+
+    def get_content_bin(self, link: str, *, user_agent = None, timeout = None) -> bytes:
+        user_agent = user_agent if user_agent else self.mUserAgent
+        timeout = timeout if timeout else self.mTimeout
+        # requestsを使用してWebページを取得
+        response = requests.get(link, timeout=timeout, headers={"User-Agent": user_agent})
+        return response.content
+
     def get_content(self, link: str, *, user_agent = None, timeout = None, type:str='htag' ) -> str:
         h_content = []
         try:
-            user_agent = user_agent if user_agent else self.mUserAgent
-            timeout = timeout if timeout else self.mTimeout
             # requestsを使用してWebページを取得
-            response = requests.get(link, timeout=timeout, headers={"User-Agent": user_agent})
+            response = self.get_content_bin( link, user_agent=user_agent, timeout=timeout)
             os.makedirs("logs", exist_ok=True)
             with open("logs/content.html","wb") as f:
                 f.write(response.content)
@@ -238,7 +245,7 @@ class WebSearchModule:
         return ""
 
     @staticmethod
-    def get_content_from_bytes( b: bytes, encoding: str = "utf-8",*, type:str='htag') -> str:
+    def bytes_to_document( b: bytes, encoding: str = "utf-8" ) -> HtmlElement:
         content = None
         min_count = len(b)+1
         for enc in ["utf-8","cp932","iso-2022-jp","euc-jp"]:
@@ -251,7 +258,7 @@ class WebSearchModule:
                     content = txt
                     min_count = count
             except:
-                logger.exception(f"encoding:{encoding}")
+                logger.exception(f"encoding:{enc}")
         if content is None:
             return None
 
@@ -265,9 +272,11 @@ class WebSearchModule:
                 logger.exception(f"encoding:{encoding}")
                 zDocument = None
 
-        if zDocument is None:
-            return None
+        return zDocument
 
+    @staticmethod
+    def get_content_from_bytes( b: bytes, encoding: str = "utf-8",*, type:str='htag') -> str:
+        zDocument = WebSearchModule.bytes_to_document( b )
         return WebSearchModule.get_content_from_xxx(zDocument, type=type)
 
     @staticmethod

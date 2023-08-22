@@ -83,7 +83,7 @@ line_webhook_handler = WebhookHandler(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRE
 agent_repo_path = "agents"
 os.makedirs(agent_repo_path,exist_ok=True)
 bot_repo = BotRepository(agent_repo_path)
-news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ',num_result="h48")
+news_repo = NewsRepo('ニュース AND 猫 OR キャット OR にゃんこ')
 task_repo = AITaskRepo()
 
 @app.route("/callback", methods=['POST'])
