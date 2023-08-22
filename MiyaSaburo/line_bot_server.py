@@ -161,7 +161,7 @@ class LineTaskRequest(RequestData):
     def __init__(self, task:AITask ):
         super().__init__( task.bot_id )
         self.task:AITask = task
-        self.query = f"It's time to do the: \"{Utils.empty_to_blank(task.what_to_do)} {Utils.empty_to_blank(task.how_to_do)}\"."
+        self.query = f"This is a notice from the schedule timer. It's time for your reservation. Inform time and schedule to user, and do the folowing: \"{Utils.empty_to_blank(task.what_to_do)} {Utils.empty_to_blank(task.how_to_do)}\"."
 
     def response_message(self, talk_id: str, message: str ) -> None:
         try:
