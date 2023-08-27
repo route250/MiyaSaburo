@@ -11,6 +11,7 @@ from enum import Enum
 from pydantic import Field, BaseModel
 from langchain.tools.base import BaseTool
 from typing import Optional, Type
+from .html_util import HtmlUtil
 
 from langchain.callbacks.manager import (
     AsyncCallbackManagerForToolRun,
@@ -202,25 +203,6 @@ class WebSearchModule:
 
         return metadata_result
     
-    RE_NORMALIZE_1 = r"[ \t\r]*\n"
-    RE_NORMALIZE_2 = r"\n\n\n*"
-
-    @staticmethod
-    def normalize( value:str )->str:
-        if value is None:
-            return "#None"
-        value = re.sub(WebSearchModule.RE_NORMALIZE_1,"\n", value)
-        value = re.sub(WebSearchModule.RE_NORMALIZE_2,"\n\n", value)
-        return value
-
-    @staticmethod
-    def dump_str( value:str )->str:
-        if value is None:
-            return "#None"
-        value = value.replace("\\\\","\\")
-        value = value.replace("\n","\\n").replace("\\r","\\r").replace("\t","\\t")
-        return value
-
     XPATH_HTAG=".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"
     RE_H_MATCH = re.compile('^h[1-6]$')
 
@@ -232,51 +214,22 @@ class WebSearchModule:
         return response.content
 
     def get_content(self, link: str, *, user_agent = None, timeout = None, type:str='htag' ) -> str:
-        h_content = []
         try:
             # requestsを使用してWebページを取得
-            response = self.get_content_bin( link, user_agent=user_agent, timeout=timeout)
+            response: bytes = self.get_content_bin( link, user_agent=user_agent, timeout=timeout)
             os.makedirs("logs", exist_ok=True)
             with open("logs/content.html","wb") as f:
-                f.write(response.content)
-            return WebSearchModule.get_content_from_bytes( response.content, response.encoding, type=type )
+                f.write(response)
+            return WebSearchModule.get_content_from_bytes( response, None, type=type )
+        except requests.exceptions.SSLError:
+            logger.error( f"SSLError url:{link}")
         except Exception as e:
-            logger.exception("")
+            logger.exception("Error occured while getting content from URL: {0}. Error: {1}".format(link, str(e)))
         return ""
 
     @staticmethod
-    def bytes_to_document( b: bytes, encoding: str = "utf-8" ) -> HtmlElement:
-        content = None
-        min_count = len(b)+1
-        for enc in ["utf-8","cp932","iso-2022-jp","euc-jp"]:
-            try:
-                txt = b.decode( enc, errors="backslashreplace" )
-                if txt is None or len(txt)==0:
-                    continue
-                count = txt.count('\\')
-                if count < min_count:
-                    content = txt
-                    min_count = count
-            except:
-                logger.exception(f"encoding:{enc}")
-        if content is None:
-            return None
-
-        zDocument: HtmlElement = None
-        try:
-            zDocument = html.fromstring(content)
-        except:
-            try:
-                zDocument = html.fromstring(b)
-            except:
-                logger.exception(f"encoding:{encoding}")
-                zDocument = None
-
-        return zDocument
-
-    @staticmethod
-    def get_content_from_bytes( b: bytes, encoding: str = "utf-8",*, type:str='htag') -> str:
-        zDocument = WebSearchModule.bytes_to_document( b )
+    def get_content_from_bytes( b: bytes, encoding: str = None,*, type:str='htag') -> str:
+        zDocument = HtmlUtil.bytes_to_document( b )
         return WebSearchModule.get_content_from_xxx(zDocument, type=type)
 
     @staticmethod
@@ -285,13 +238,17 @@ class WebSearchModule:
         return WebSearchModule.get_content_from_xxx(zDocument)
 
     @staticmethod
-    def dump( e: HtmlElement ):
-        txt = html.unicode( html.tostring(e,encoding="utf8"), encoding="utf8" )
-        # if "エレベータ" in txt:
-        #     print( f"---DUMP---\n{txt}\n")
+    def get_content_from_xxx( zDocument: HtmlElement,*, type:str='htag') -> str:
+        HtmlUtil.trim_html( zDocument )
+        os.makedirs("logs", exist_ok=True)
+        with open("logs/content-trim.html","wb") as f:
+            f.write( html.tostring(zDocument))
+        text = WebSearchModule.get_child_content(zDocument)
+        norm_text = HtmlUtil.str_normalize(text)
+        return norm_text
 
     @staticmethod
-    def get_content_from_xxx( zDocument: HtmlElement,*, type:str='htag') -> str:
+    def get_content_from_xxx_old( zDocument: HtmlElement,*, type:str='htag') -> str:
         h_content = []
         try:
             ads_xpath = [
@@ -331,7 +288,7 @@ class WebSearchModule:
                 if zMain is not None:
                     ads_remove_tags(zDocument)
                     text = WebSearchModule.get_child_content(zMain)
-                    norm_text = WebSearchModule.normalize(text)
+                    norm_text = HtmlUtil.str_normalize(text)
                     if len(norm_text)>0:
                         h_content.append( norm_text )
             else:
@@ -341,14 +298,14 @@ class WebSearchModule:
                     h_tag: HtmlElement
                     for h_tag in zMain.xpath(WebSearchModule.XPATH_HTAG):
                         h_text = h_tag.text_content()
-                        h_text = WebSearchModule.normalize(h_text)
+                        h_text = HtmlUtil.str_normalize(h_text)
                         text = WebSearchModule.get_next_content(h_tag,stop=True)
-                        norm_text = WebSearchModule.normalize(text)
+                        norm_text = HtmlUtil.str_normalize(text)
                         if len(norm_text)>0:
                             h_content.append( norm_text )
         except Exception as e:
             logger.exception("")
-        return WebSearchModule.normalize("\n".join(h_content))
+        return HtmlUtil.str_normalize("\n".join(h_content))
 
     # -----------------------------------------------------------------
     # 配下のhタグが一番多いdivタグを探す
@@ -554,7 +511,7 @@ class WebSearchModule:
                 #else:
                 #    text = next_tag.text_content()
                 text = WebSearchModule.get_child_content( next_tag )
-                text = WebSearchModule.normalize( text )
+                text = HtmlUtil.str_normalize( text )
                 if "a" == next_tag.tag:
                     href = next_tag.attrib.get("href",None)
                     if href is not None and len(href)>0:
@@ -572,7 +529,7 @@ class WebSearchModule:
                     if len(text)>0:
                         buffer = f"{buffer} {text}".strip()
             else:
-                text = WebSearchModule.normalize( str(next_tag) )
+                text = HtmlUtil.str_normalize( str(next_tag) )
                 re11 = r"^[\r\n\t ]*"
                 text = re.sub(re11,"",text)
                 re12 = r"[\r\n\t ]*$"

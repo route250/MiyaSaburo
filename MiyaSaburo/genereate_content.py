@@ -1,3 +1,4 @@
+import sys,os,re
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
 import requests
@@ -132,7 +133,7 @@ def neko_news():
     module : WebSearchModule = WebSearchModule()
     dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
 
-    dates = "2023/8/12"
+    dates = "2023/8/21"
     query = f"猫の話題 after: {dates}"
 
 
@@ -144,57 +145,62 @@ def neko_news():
         site_title = d.get('title',"")
         site_link = d.get('link',"")
         if len(site_title)==0 or len(site_link)==0:
+            print( f"Error: no title {site_title} {site_link}")
             continue
         if "youtube.com" in site_link:
+            print( f"Error: skip youtube {site_title} {site_link}")
             continue
 
-        site_text = module.get_content( site_link, type="title" )
-        if site_text is None:
+        site_text: str = module.get_content( site_link, type="title" )
+        if site_text is None or site_text == '':
+            print( f"Error: no article {site_title} {site_link}")
             continue
 
-        prompt1 = "URL:{site_link}\nTITLE:{site_title}"
-        prompt1 = f"{prompt1}\n\n記事内容\n{site_text[:2000]}"
-        prompt1 = f"{prompt1}\n\上記のネット記事から、タイトル「{site_title}」に関係ない部分を削除して下さい。\n"
+        if site_text.find("記事が見つかりません")>=0 or site_text.find("公開期間が終了")>=0:
+            print( f"Error: no article {site_title} {site_link}")
+            print(site_text)
+            continue
+
+        examples = [ 
+            ("トカゲ見つけて下さい","なんかの広告\nトカゲが昨日逃げました\nなんかの広告","トカゲが逃げました"),
+            ("トカゲ見つけて下さい","なんかの広告\nなんかの広告\nなんかの広告","記事無し"),
+            ]
+        prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
+        article_fmt = "記事タイトル:{}\n記事内容:\n{}"
+        msg_hist = []
+        # for title_data,in_data, out_data in examples:
+        #     msg_hist += [ {"role": "system", "content": prompt_fmt.format(title_data) } ]
+        #     msg_hist += [ {"role": "user", "content": in_data } ]
+        #     msg_hist += [ {"role": "assistant", "content": out_data } ]
+
+        msg_hist += [ {"role": "system", "content": prompt_fmt } ]
+        msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
 
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": prompt1 },
-            ],
+            messages=msg_hist
         )
+
+        if response is None or response.choices is None or len(response.choices)==0:
+            print( f"Error:invalid response from openai\n{response}")
+            continue
 
         base_article = response.choices[0]["message"]["content"].strip()
-        # print( f"{base_article}" )
-
-        prompt1 = "URL:{site_link}\nTITLE:{site_title}"
-        prompt1 = f"{prompt1}\n\n記事内容\n{base_article[:2000]}"
-        prompt1 = f"{prompt1}\n\野良猫がこのニュースを読んだときの反応は？"
-        prompt1 = f"{prompt1}\n【チャットボットの現在の感情パラメーター】"
-        prompt1 = f"{prompt1}\n喜び:0〜5\n怒り:0〜5\n悲しみ:0〜5\n楽しさ:0〜5\n自信:0〜5\n困惑:0〜5\n恐怖:0〜5"
-
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": prompt1 },
-            ],
-        )
-
-        param = response.choices[0]["message"]["content"].strip()
-        prompt2 = "野良猫がこの記事の紹介をツイートするセリフを生成して下さい\n"
-
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": prompt1 },
-                {"role": "assistant", "content": param },
-                {"role": "user", "content": prompt2 },
-            ],
-        )
-        article_text = response.choices[0]["message"]["content"].strip()
-
+        
+        if base_article is None or len(base_article)<20:
+            print( f"Error: no tweet {site_title} {site_link}\n{base_article}")
+            continue
+        tweet_text = base_article
+        p = tweet_text.find("#")
+        hashtag_list = [ "#猫", "#cat", "#猫好きさんと繋がりたい"]
+        if p>1:
+            tweet_text = tweet_text[:p].strip()
+        tweet_tags = " ".join(hashtag_list)
+        
         print("----------------------------------------------")
-        print( f"{article_text}" )
-        print( f"ニュース：{site_title} {site_link}")
+        print( f"{tweet_text}" )
+        print( f"{site_link}")
+        print( f"{tweet_tags}" )
         print("----------------------------------------------")
 
 # DALL-Eによる画像生成
@@ -235,3 +241,4 @@ if __name__ == '__main__':
     neko_news()
     #img_test()
     #test()
+
