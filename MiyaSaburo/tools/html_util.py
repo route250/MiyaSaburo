@@ -11,7 +11,7 @@ logger = logging.getLogger("HtmlUtil")
 
 class HtmlUtil:
 
-    HTML_SCRIPT_TAGS = [ "script", "#comment" ]
+    HTML_SCRIPT_TAGS = [ "script", "style", "#comment" ]
     HTML_BLOCK_TAGS = [ "div","span", "ol", "ul" ]
     HTML_LINK_TAGS = [ "a", "form" ]
     HTML_LINK_ATTS = [ "onclick", "on_click" ]
@@ -54,28 +54,47 @@ class HtmlUtil:
     def trim_html( doc: HtmlElement ) -> None:
         HtmlUtil.trim_article_tag(doc)
         HtmlUtil.trim_block_tag(doc)
+        HtmlUtil.trim_h1_tag(doc)
 
     @staticmethod
     def trim_article_tag( doc: HtmlElement ) -> None:
         article_tags = doc.xpath("//article")
         if article_tags is not None and len(article_tags)>0:
-            tag_paths = {}
-            # articleタグの祖先をマークする
-            for tag in article_tags:
-                while tag is not None:
-                    tag_paths[tag] = 1
-                    tag = tag.getparent()
-            # マークされてないタグをクリアする
-            for tag in article_tags:
-                parent = tag.getparent()
-                while parent is not None:
-                    tagname = HtmlUtil.tagname(parent)
-                    if "html" == tagname:
-                        break
-                    for child in parent.getchildren():
-                        if not child in tag_paths:
-                            HtmlUtil.reset_tag(child)
-                    parent = parent.getparent()
+            HtmlUtil.trim_parent_tag( article_tags )
+
+    @staticmethod
+    def trim_h1_tag( doc: HtmlElement ) -> None:
+        h1_list = doc.xpath("//h1")
+        if h1_list is None or len(h1_list)==1:
+            ht_tag = HtmlUtil.pop_tag( h1_list[0] )
+            while ht_tag is not None:
+                txt = HtmlUtil.to_content(ht_tag)
+                if len(txt)>500:
+                    break
+                if ht_tag.getparent() is None:
+                    break
+                ht_tag = ht_tag.getparent()
+            HtmlUtil.trim_parent_tag( [ ht_tag ] )
+
+    @staticmethod
+    def trim_parent_tag( article_tags: list[HtmlElement] ) -> None:
+        tag_paths = {}
+        # articleタグの祖先をマークする
+        for tag in article_tags:
+            while tag is not None:
+                tag_paths[tag] = 1
+                tag = tag.getparent()
+        # マークされてないタグをクリアする
+        for tag in article_tags:
+            parent = tag.getparent()
+            while parent is not None:
+                tagname = HtmlUtil.tagname(parent)
+                if "html" == tagname:
+                    break
+                for child in parent.getchildren():
+                    if not child in tag_paths:
+                        HtmlUtil.reset_tag(child)
+                parent = parent.getparent()
 
     @staticmethod
     def trim_block_tag( doc: HtmlElement, limit: float = 0.7 ) -> HtmlElement:
@@ -130,7 +149,72 @@ class HtmlUtil:
             doc.remove(child)
         doc.attrib.clear()
         doc.text=''
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @staticmethod
+    def pop_tag( elem: HtmlElement ):
+        tag: HtmlElement = elem
+        size = len(tag.text_content().strip())
+        parent: HtmlElement = tag.getparent()
+        while parent is not None:
+            l = len(parent.text_content().strip())
+            if size<l:
+                break
+            size = l
+            tag = parent
+            parent = tag.getparent()
+        return tag
 
+    #------------------------------------------------------------------------------
+    # スコアが高いものを選択
+    #------------------------------------------------------------------------------
+    @staticmethod
+    def maxscore( zTagMap: dict[HtmlElement:int]):
+        # スコアが一番高いものを選択
+        top = []
+        maxcount = 0
+        for e, n in zTagMap.items():
+            if n>maxcount:
+                maxcount = n
+                top = [ e ]
+            elif n == maxcount:
+                top.append(e)
+        return top, maxcount
+
+    @staticmethod
+    def get_tags_by_title( elem: HtmlElement, title: str ) -> list[HtmlElement]:
+        if elem is None or title is None or len(title)<10:
+            return None
+        # タイトル文字列を含むタグを探す
+        zTagMap: dict[HtmlElement,int] = {}
+        step = 3
+        words = []
+        for i in range(0,len(title)):
+            key = title[i:i+step].strip()
+            if len(key)>0:
+                key=key.replace("&","&amp;")
+                key=key.replace("'","&quot;")
+                words.append(key)
+        for i in range(0,len(title),step+2):
+            key = title[i:i+step].strip()
+            if len(key)>0:
+                words.append(key)
+        for w in words:
+            for e0 in elem.xpath(f"/html/body//*[contains(text(),'{w}')]"):
+                e = e0 # WebSearchModule._popup(e0)
+                zTagMap[e] = zTagMap.get(e,0) + 1
+        if not zTagMap:
+            return None
+        count = len(words)*0.5
+        # スコアが高いのを選択
+        top = []
+        maxcount = 0
+        top, maxcount = HtmlUtil.maxscore(zTagMap)
+        if maxcount<count:
+            return None
+        return top
+        
     @staticmethod
     def tagname( doc: HtmlMixin ) -> str:
         if doc is not None:

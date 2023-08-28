@@ -371,34 +371,8 @@ class WebSearchModule:
 
     @staticmethod
     def _get_element_by_content( elem: HtmlElement, title: str ) -> HtmlElement:
-        if elem is None or title is None or len(title)<10:
-            return None
-        # タイトル文字列を含むタグを探す
-        zTagMap: dict[HtmlElement,int] = {}
-        step = 3
-        words = []
-        for i in range(0,len(title)):
-            key = title[i:i+step].strip()
-            if len(key)>0:
-                key=key.replace("&","&amp;")
-                key=key.replace("'","&quot;")
-                words.append(key)
-        for i in range(0,len(title),step+2):
-            key = title[i:i+step].strip()
-            if len(key)>0:
-                words.append(key)
-        for w in words:
-            for e0 in elem.xpath(f"/html/body//*[contains(text(),'{w}')]"):
-                e = e0 # WebSearchModule._popup(e0)
-                zTagMap[e] = zTagMap.get(e,0) + 1
-        if not zTagMap:
-            return None
-        count = len(words)*0.5
-        # スコアが高いのを選択
-        top = []
-        maxcount = 0
-        top, maxcount = maxscore(zTagMap)
-        if maxcount<count:
+        top = HtmlUtil.get_tags_by_title( elem, title )
+        if top is None:
             return None
         if len(top) == 1:
             return top[0]
@@ -406,11 +380,11 @@ class WebSearchModule:
         # 復数あったので、絞り込む
         zTagMap = {}
         for e in top:
-            e = WebSearchModule._popup(e)
+            e = HtmlUtil.pop_tag(e)
             ss = e.xpath("following-sibling::*")
             nn = len(ss)
             zTagMap[e] = nn
-        top, maxcount = maxscore(zTagMap)
+        top, maxcount = HtmlUtil.maxscore(zTagMap)
         if len(top) == 1:
             return top[0]
 
@@ -419,7 +393,7 @@ class WebSearchModule:
         for e in top:
             pri = tag_pri(e)
             zTagMap[e] = pri
-        top, maxcount = maxscore(zTagMap)
+        top, maxcount = HtmlUtil.maxscore(zTagMap)
         if len(top) == 1:
             return top[0]
 
@@ -439,7 +413,7 @@ class WebSearchModule:
             return sib[0]
 
         key = max(zTagMap, key=zTagMap.get)
-        if zTagMap[key]>count:
+        if zTagMap[key]>0:
             return key
         return None
 
@@ -558,22 +532,6 @@ def clear_tag( elem ):
 #------------------------------------------------------------------------------
 #
 #------------------------------------------------------------------------------
-def pop_tag( elem: HtmlElement ):
-    tag: HtmlElement = elem
-    size = len(tag.text_content().strip())
-    parent: HtmlElement = tag.getparent()
-    while parent is not None:
-        l = len(parent.text_content().strip())
-        if size<l:
-            break
-        size = l
-        tag = parent
-        parent = tag.getparent()
-    return tag
-
-#------------------------------------------------------------------------------
-#
-#------------------------------------------------------------------------------
 def get_first( list: list[HtmlElement] ) -> HtmlElement:
     if list is None or len(list)==0:
         return None
@@ -633,21 +591,6 @@ def uniq_tag( map: dict ) -> dict:
         if tag is not None:
             del map[tag]
     return map
-
-#------------------------------------------------------------------------------
-# スコアが高いものを選択
-#------------------------------------------------------------------------------
-def maxscore( zTagMap: dict[HtmlElement:int]):
-    # スコアが高いのを選択
-    top = []
-    maxcount = 0
-    for e, n in zTagMap.items():
-        if n>maxcount:
-            maxcount = n
-            top = [ e ]
-        elif n == maxcount:
-            top.append(e)
-    return top, maxcount
 
 #------------------------------------------------------------------------------
 # タグ名による優先度
@@ -743,11 +686,11 @@ def get_title_tag( html: HtmlElement ) -> list[HtmlElement]:
         return None
     count = len(word_list)*0.5
     # スコアが高いのを選択
-    title_tags, score = maxscore(zTagMap)
+    title_tags, score = HtmlUtil.maxscore(zTagMap)
     if score<count:
         return None
 
-    title_tags = [ pop_tag(e) for e in title_tags ]
+    title_tags = [ HtmlUtil.pop_tag(e) for e in title_tags ]
     
     if len(title_tags)==1:
         return title_tags[0]
@@ -768,7 +711,7 @@ def get_title_tag( html: HtmlElement ) -> list[HtmlElement]:
     for e in title_tags:
         pri = tag_pri(e)
         zTagMap[e] = pri
-    title_tags, maxcount = maxscore(zTagMap)
+    title_tags, maxcount = HtmlUtil.maxscore(zTagMap)
     if len(title_tags) == 1:
         return title_tags[0]
 
@@ -819,7 +762,7 @@ def ads_get_tags( elem: HtmlElement ) -> list[HtmlElement]:
             rate = l2/l1
 
             if rate>0.8:
-                tag = pop_tag(div)
+                tag = HtmlUtil.pop_tag(div)
                 result[tag] = rate
 
         uniq_tag( result )
