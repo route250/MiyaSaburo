@@ -1,4 +1,5 @@
 import sys,os,re
+import traceback
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
 import requests
@@ -164,12 +165,29 @@ def neko_news():
     dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
 
     dates =  Utils.date_today()
-    query = f"猫の話題 after: {dates}"
-    query = f"Funny Cat News stories -site:www.youtube.com after: {dates}"
+    LANG_JP='jp'
+    lang=LANG_JP
+    if lang == LANG_JP:
+        query = f"猫の話題 -site:www.youtube.com after: {dates}"
+    else:
+        query = f"Funny Cat News stories -site:www.youtube.com after: {dates}"
 
     n_return = 10
     search_results = module.search_meta( query, num_result = n_return )
     # print( f"result:{len(search_results)}")
+
+    detect_fmt = "下記の記事内容について\n\n記事タイトル:{}\n記事内容:\n{}\n\n"
+    detect_fmt = f"{detect_fmt}下記の項目に答えて下さい。\n"
+    detect_fmt = f"{detect_fmt}1)この記事に含まれる国名・地名をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}2)地名は日本国内のものですか？\n"
+    detect_fmt = f"{detect_fmt}3)この記事に日本語の「海外」という単語は含まれていますか？\n"
+    detect_fmt = f"{detect_fmt}4)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
+    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語やアニメーションタイトルをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}\n\n上記の情報より下記の質問に回答して下さい\n"
+    detect_fmt = f"{detect_fmt}6)この記事は日本国内の出来事ですか？海外での出来事ですか？(Japan or Otherで回答すること)\n"
+    detect_fmt = f"{detect_fmt}8)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
+    detect_fmt = f"{detect_fmt}9)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
 
     examples = [ 
         ("トカゲ見つけて下さい","なんかの広告\nトカゲが昨日逃げました\nなんかの広告","トカゲが逃げました"),
@@ -214,18 +232,23 @@ def neko_news():
     update_prompt = "上記の改善点を踏まえて、野良猫っぽい出力ツイートを120文字以内で生成するにゃ\n出力文:"
 
 
-    duble_check = {
+    exclude_site = {
         "www.youtube.com": 1,
         "cat.blogmura.com": 1,
         "www.thoroughbreddailynews.com": 1
     }
+    site_hist = {}
     tw_count = 0
     for d in search_results:
         site_title = d.get('title',"")
         site_link = d.get('link',"")
         site_top = urlparse(site_link).netloc
 
-        if duble_check.get( site_top, None ) is not None:
+        if exclude_site.get( site_top, None ) is not None:
+            print( f"Exclude {site_link}")
+            continue
+
+        if site_hist.get( site_top, None ) is not None:
             print( f"Skip {site_link}")
             continue
 
@@ -266,6 +289,33 @@ def neko_news():
             continue
 
         #---------------------------
+        # 記事判定
+        #---------------------------
+        detect_hist = []
+        detect_hist += [ {"role": "user", "content": detect_fmt.format( site_title, site_text[:2000] ) } ]
+        detect_result: str = ChatCompletion(detect_hist)
+        if detect_result is None or len(detect_result)<20:
+            print( f"Error: no tweet {site_title} {site_link}\n{detect_result}")
+            continue
+        print(detect_result)
+
+        if detect_result.find("Cat")<0 or detect_result.find("NotSale")<0:
+            print( f"Error: 不適切な記事 {site_title} {site_link}\n{detect_result}" )
+            continue
+
+        #---------------------------
+        # ポスト言語判定
+        #---------------------------
+        post_limit = 0
+        if detect_result.find("Japan")<0:
+            # 日本のニュースでないなら日本語でポスト
+            post_lang='Japanese'
+            post_limit = 129
+        else:
+            # 日本のニュースは英語でポスト
+            post_lang='English'
+            post_limit = 229
+        #---------------------------
         # 初期生成
         #---------------------------
         msg_hist = []
@@ -276,6 +326,7 @@ def neko_news():
 
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
         msg_hist += [ {"role": "system", "content": prompt_fmt } ]
+        msg_hist += [ {"role": "system", "content": f"{post_lang}で{post_limit}文字以内で生成するにゃ" } ]
 
         base_article = ChatCompletion(msg_hist)
         base_article = trim_post( base_article );
@@ -283,10 +334,13 @@ def neko_news():
             print( f"Error: no tweet {site_title} {site_link}\n{base_article}")
             continue
 
-        nn = 1
+        nn = 0
+        nn_max = 3
+        nn_limit = 5
         print(f"{nn}回目ツイート内容\n{base_article}")
 
-        for nn in range(1,2):
+        while nn <= nn_max and nn <= nn_limit:
+            nn += 1
             base_article0 = base_article
             #---------------------------
             # ツイートを評価する
@@ -300,8 +354,9 @@ def neko_news():
                 print( f"Error: no tweet {site_title} {site_link}\n{evaluate_response}")
                 continue
 
-            if len(base_article0)>129:
-                evaluate_response = evaluate_response+"\n文字数が129文字を超えてるにゃ。"
+            if len(base_article0)>post_limit:
+                evaluate_response = f"{evaluate_response}\n文字数が{post_limit}文字を超えてるにゃ。"
+                nn_max += 1
 
             print(f"[{nn}回目評価内容]\n{evaluate_response}")
 
@@ -311,6 +366,7 @@ def neko_news():
             msg_hist += [ {"role": "assistant", "content": base_article0 } ]
             msg_hist += [ {"role": "system", "content": evaluate_response } ]
             msg_hist += [ {"role": "system", "content": update_prompt } ]
+            msg_hist += [ {"role": "system", "content": f"{post_lang}で{post_limit}文字以内で生成するにゃ" } ]
 
             base_article = ChatCompletion(msg_hist)
             base_article = trim_post( base_article );
@@ -319,40 +375,44 @@ def neko_news():
         tweet_text = base_article
         p = tweet_text.find("#")
         hashtag_list = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#animals", "#funnyanimals"]
+        if post_lang == LANG_JP:
+            hashtag_list = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#animals", "#funnyanimals"]
+        else:
+            hashtag_list = [ "#cat", "#CatsAreFamily", "#pets", "#animals", "#funnyanimals"]
+
         if p>1:
             tweet_text = tweet_text[:p].strip()
         tweet_tags = " ".join(hashtag_list)
 
         tx = f"{tweet_text}\n\n{site_link}\n\n{tweet_tags}"
-        chars = len(tx);
+        chars = len(tx)
         print("----------------------------------------------")
         print( f"{tweet_text}" )
         print( f"{site_link}")
         print( f"{tweet_tags}" )
         print("----------------------------------------------")
 
-        if len(tweet_text) > 129:
+        if len(tweet_text) > post_limit:
             print( f"Error: too long" )
             continue
 
+        # if tweet_text.find("猫")<0 and tweet_text.find("ねこ")<0 and tweet_text.find("ネコ")<0:
+        #     print( f"Error: not found 猫 ")
+        #     print(tweet_text)
+        #     continue
 
-        if tweet_text.find("猫")<0 and tweet_text.find("ねこ")<0 and tweet_text.find("ネコ")<0:
-            print( f"Error: not found 猫 ")
-            print(tweet_text)
-            continue
+        # if tweet_text.find("販売")>=0 or tweet_text.find("価格")>=0 or tweet_text.find("値段")>=0:
+        #     print( f"Error: found 販売")
+        #     print(tweet_text)
+        #     continue
 
-        if tweet_text.find("販売")>=0 or tweet_text.find("価格")>=0 or tweet_text.find("値段")>=0:
-            print( f"Error: found 販売")
-            print(tweet_text)
-            continue
-
-        if tweet_text.find("ノミ")>=0:
-            print( f"Error: found ノミ")
-            continue
+        # if tweet_text.find("ノミ")>=0:
+        #     print( f"Error: found ノミ")
+        #     continue
 
         # 投稿
        # tweeter_client.create_tweet(text=tx)
-        duble_check[site_top] = 1
+        site_hist[site_top] = 1
         tw_count += 1
         if tw_count>=2:
             break
@@ -364,20 +424,31 @@ def trim_post( content: str ) -> str:
         content = content[1:-1]       
     content = content.replace("[URL]","")
     content = content.replace("→","")
+    p = content.find("#")
+    if p>0:
+        content = content[0:p-1]
     content = content.strip()
     return content
 
 def ChatCompletion( mesg_list ):
-    response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=mesg_list
-        )
+    try:
+        print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
+        response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=mesg_list
+            )
 
-    if response is None or response.choices is None or len(response.choices)==0:
-        print( f"Error:invalid response from openai\n{response}")
+        if response is None or response.choices is None or len(response.choices)==0:
+            print( f"Error:invalid response from openai\n{response}")
+            return None
+
+        content = response.choices[0]["message"]["content"].strip()
+    except openai.error.AuthenticationError as ex:
+        print( f"{ex}" )
         return None
-
-    content = response.choices[0]["message"]["content"].strip()
+    except Exception as ex:
+        traceback.print_exc()
+        return None
 
     if content is None or len(content)<20:
         print( f"Error: no tweet \n{content}")
