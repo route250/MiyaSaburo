@@ -12,6 +12,9 @@ from io import BytesIO
 from tools.webSearchTool import WebSearchModule
 from libs.utils import Utils
 
+if __name__ == "__main__":
+    Utils.load_env( ".miyasaburo.conf" )
+
 def to_embedding( input ):
     res = openai.Embedding.create(input=input, model="text-embedding-ada-002")
     return [data.get('embedding',None) for data in res.get('data',[])]
@@ -183,21 +186,20 @@ def neko_news():
     detect_fmt = f"{detect_fmt}3)この記事に日本語の「海外」という単語は含まれていますか？\n"
     detect_fmt = f"{detect_fmt}4)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
-    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語やアニメーションタイトルをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画・演劇、公演、アニメーションをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的な思想や思想誘導が含まれていればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}10)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}\n\n上記の情報より下記の質問に回答して下さい\n"
-    detect_fmt = f"{detect_fmt}6)この記事は日本国内の出来事ですか？海外での出来事ですか？(Japan or Otherで回答すること)\n"
-    detect_fmt = f"{detect_fmt}8)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
-    detect_fmt = f"{detect_fmt}9)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
+    detect_fmt = f"{detect_fmt}11)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
+    detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
+    detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
+    detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
 
-    examples = [ 
-        ("トカゲ見つけて下さい","なんかの広告\nトカゲが昨日逃げました\nなんかの広告","トカゲが逃げました"),
-        ("トカゲ見つけて下さい","なんかの広告\nなんかの広告\nなんかの広告","記事無し"),
-        ]
-    prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
-    prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
-    article_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
+    article_fmt = "下記の記事をフォロワーに紹介するツイートを生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
     prompt_fmt = "\n".join( [
-        "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を140文字程度で記述して下さいにゃ。",
+        "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
         "",
         "制約条件：",
         "・投稿を見た人が興味を持つ内容",
@@ -210,6 +212,9 @@ def neko_news():
         "・猫のニュースで癒やされたい人", # （タツイッーで発信ターゲットにしている属性）
         "・猫ニュースを面白く伝える", # （今回のツイートで発信している対象の属性）
         "・猫の知られざる世界を見てみたい人", #（上記の対象が課題に感じる場面の具体）
+        "",
+        "出力言語:{}",
+        "文字数制限:{}",
         "",
         "出力文:"
     ] )
@@ -229,7 +234,7 @@ def neko_news():
         "改善点：",
     ])
 
-    update_prompt = "上記の改善点を踏まえて、野良猫っぽい出力ツイートを120文字以内で生成するにゃ\n出力文:"
+    update_prompt = "上記の改善点を踏まえて、野良猫っぽい出力ツイートを{}で{}文字以内で生成するにゃ\n出力文:"
 
 
     exclude_site = {
@@ -284,8 +289,11 @@ def neko_news():
             print(site_text)
             continue
 
-        if site_text.find("ノミ")>=0:
-            print( f"Error: found ノミ")
+        if site_text.find("譲渡会")>=0:
+            print( f"Skip: found 譲渡会")
+            continue
+        if site_text.find("ディズニー")>=0 or site_text.find("disney")>=0  or site_text.find("Disney")>=0:
+            print( f"Skip: found ディズニー")
             continue
 
         #---------------------------
@@ -297,24 +305,32 @@ def neko_news():
         if detect_result is None or len(detect_result)<20:
             print( f"Error: no tweet {site_title} {site_link}\n{detect_result}")
             continue
+        print( f"記事タイトル:{site_title}")
+        print( f"{site_link}")
         print(detect_result)
 
-        if detect_result.find("Cat")<0 or detect_result.find("NotSale")<0:
-            print( f"Error: 不適切な記事 {site_title} {site_link}\n{detect_result}" )
+        if find_keyword( detect_result, "Cat", "NotCat" )!=0:
+            print( f"Error: 猫記事じゃない {site_title} {site_link}\n" )
+            continue
+        if find_keyword(detect_result, "Sale", "NotSale")!=0:
+            print( f"Error: 不適切な記事 {site_title} {site_link}\n" )
+            continue
+        if find_keyword(detect_result, "Asocial", "NotAsocial")!=0:
+            print( f"Error: 不適切な記事 {site_title} {site_link}\n" )
             continue
 
         #---------------------------
         # ポスト言語判定
         #---------------------------
-        post_limit = 0
-        if detect_result.find("Japan")<0:
-            # 日本のニュースでないなら日本語でポスト
-            post_lang='Japanese'
-            post_limit = 129
-        else:
+        post_lang = find_keyword(detect_result, "InsideJapan", "OutsideJapan")
+        if post_lang==0:
             # 日本のニュースは英語でポスト
             post_lang='English'
             post_limit = 229
+        elif post_lang==1:
+            # 日本のニュースでないなら日本語でポスト
+            post_lang='Japanese'
+            post_limit = 129
         #---------------------------
         # 初期生成
         #---------------------------
@@ -325,11 +341,10 @@ def neko_news():
         #     msg_hist += [ {"role": "assistant", "content": out_data } ]
 
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
-        msg_hist += [ {"role": "system", "content": prompt_fmt } ]
-        msg_hist += [ {"role": "system", "content": f"{post_lang}で{post_limit}文字以内で生成するにゃ" } ]
+        msg_hist += [ {"role": "system", "content": prompt_fmt.format( post_lang, post_limit) } ]
 
         base_article = ChatCompletion(msg_hist)
-        base_article = trim_post( base_article );
+        base_article = trim_post( base_article )
         if base_article is None or len(base_article)<20:
             print( f"Error: no tweet {site_title} {site_link}\n{base_article}")
             continue
@@ -345,31 +360,39 @@ def neko_news():
             #---------------------------
             # ツイートを評価する
             #---------------------------
-            evaluate_msgs = [
-                {"role": "assistant", "content": base_article0 },
-                {"role": "system", "content": evaluate_prompt }
-            ]
-            evaluate_response = ChatCompletion(evaluate_msgs)
-            if evaluate_response is None or len(evaluate_response)<20:
-                print( f"Error: no tweet {site_title} {site_link}\n{evaluate_response}")
-                continue
-
-            if len(base_article0)>post_limit:
-                evaluate_response = f"{evaluate_response}\n文字数が{post_limit}文字を超えてるにゃ。"
+            if len(base_article0)<=post_limit:
+                evaluate_msgs = [
+                    {"role": "assistant", "content": base_article0 },
+                    {"role": "system", "content": evaluate_prompt }
+                ]
+                evaluate_response = ChatCompletion(evaluate_msgs)
+                if evaluate_response is None or len(evaluate_response)<20:
+                    print( f"Error: no tweet {site_title} {site_link}\n{evaluate_response}")
+                    continue
+            else:
+                evaluate_response = f"文字数が{post_limit}文字を超えてるにゃ。"
                 nn_max += 1
 
             print(f"[{nn}回目評価内容]\n{evaluate_response}")
+
+            pattern = re.compile(r'合計点数.*(\d+)点')
+            point_result = pattern.search(evaluate_response)
+            if point_result is not None:
+                print(f"検出結果:{point_result.group(0)}")
+                point=point_result.group(1)
+                point=int(point)
+                if point<=90 and point<=100 and len(base_article0)<=post_limit:
+                    break
 
             #---------------------------
             # ツイートを改善する
             #---------------------------
             msg_hist += [ {"role": "assistant", "content": base_article0 } ]
             msg_hist += [ {"role": "system", "content": evaluate_response } ]
-            msg_hist += [ {"role": "system", "content": update_prompt } ]
-            msg_hist += [ {"role": "system", "content": f"{post_lang}で{post_limit}文字以内で生成するにゃ" } ]
+            msg_hist += [ {"role": "system", "content": update_prompt.format( post_lang, post_limit) } ]
 
             base_article = ChatCompletion(msg_hist)
-            base_article = trim_post( base_article );
+            base_article = trim_post( base_article )
             print(f"[{nn}回目ツイート内容]\n{base_article}")
 
         tweet_text = base_article
@@ -417,6 +440,13 @@ def neko_news():
         if tw_count>=2:
             break
 
+def find_keyword( content:str, a:str, b:str ) -> int:
+    if content is not None:
+        if content.find(a)>=0:
+            return 0
+        if content.find(b)>=0:
+            return 1
+    return -1
 def trim_post( content: str ) -> str:
     if content.startswith("「") and content.endswith("」"):
         content = content[1:-1]
@@ -432,7 +462,11 @@ def trim_post( content: str ) -> str:
 
 def ChatCompletion( mesg_list ):
     try:
-        print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
+
+        #print( f"openai.api_key={openai.api_key}")
+        #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
+        if openai.api_key is None:
+            openai.api_key=os.getenv('OPENAI_API_KEY')
         response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=mesg_list
@@ -444,6 +478,9 @@ def ChatCompletion( mesg_list ):
 
         content = response.choices[0]["message"]["content"].strip()
     except openai.error.AuthenticationError as ex:
+        print( f"{ex}" )
+        return None
+    except openai.error.InvalidRequestError as ex:
         print( f"{ex}" )
         return None
     except Exception as ex:
@@ -489,11 +526,7 @@ def test():
     print(f" d2: {d2}")
 
 if __name__ == '__main__':
-    homedir=Path.home()
-    if homedir is not None and len(str(homedir))>0:
-        envfile=f"{homedir}/.miyasaburo.conf"
-        if os.path.exists(envfile):
-            load_dotenv( envfile )
+
     #sys.exit(main(sys.argv))
     #xtest()
     neko_news()
