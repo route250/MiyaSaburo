@@ -1,4 +1,6 @@
-
+import sys, os
+from pathlib import Path
+from dotenv import load_dotenv
 import logging
 import time
 from zoneinfo import ZoneInfo
@@ -8,6 +10,14 @@ class Utils:
 
     logger = logging.getLogger(__name__)
     JST = ZoneInfo("Asia/Tokyo")
+
+    @staticmethod
+    def load_env( name: str ) -> None:
+        homedir=Path.home()
+        if homedir is not None and len(str(homedir))>0:
+            envfile=f"{homedir}/{name}"
+            if os.path.exists(envfile):
+                load_dotenv( envfile )
 
     @staticmethod
     def is_empty( text:str=None ) -> bool:
