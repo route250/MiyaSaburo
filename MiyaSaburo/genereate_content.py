@@ -2,6 +2,10 @@ import sys,os,re
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
 import requests
+from pathlib import Path
+from dotenv import load_dotenv
+from urllib.parse import urlparse
+import tweepy
 from PIL import Image
 from io import BytesIO
 from tools.webSearchTool import WebSearchModule
@@ -128,27 +132,113 @@ def neko_neko_network():
             print("\n\n")
             print(info)
 
+##以下箇所は取得したAPI情報と置き換えてください。
+class TwConfig:
+    def __init__(self):
+        self.reload()
+    def reload(self):
+        self.app_id = os.getenv('APP_ID')
+        self.twitter_id = os.getenv('TWITTER_ID')
+        # consumer keys
+        self.api_key = os.getenv('API_KEY')
+        self.api_key_secret = os.getenv('API_KEY_SECRET')
+        # authentication tokens
+        self.bearer_token = os.getenv('BEARER_TOKEN')
+        self.access_token = os.getenv('ACCESS_TOKEN')
+        self.access_token_secret = os.getenv('ACCESS_TOKEN_SECRET')
+        self.client_id = os.getenv('CLIENT_ID')
+        self.client_secret = os.getenv('CLIENT_SECRET')
+
 def neko_news():
-    
+
+    config = TwConfig()
+    tweeter_client = tweepy.Client(
+        bearer_token = config.bearer_token,
+        consumer_key= config.api_key,
+        consumer_secret= config.api_key_secret,
+        access_token= config.access_token,
+        access_token_secret=config.access_token_secret,
+    )
+
     module : WebSearchModule = WebSearchModule()
     dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
 
-    dates = "2023/8/21"
+    dates =  Utils.date_today()
     query = f"猫の話題 after: {dates}"
-
+    query = f"Funny Cat News stories -site:www.youtube.com after: {dates}"
 
     n_return = 10
     search_results = module.search_meta( query, num_result = n_return )
     # print( f"result:{len(search_results)}")
 
+    examples = [ 
+        ("トカゲ見つけて下さい","なんかの広告\nトカゲが昨日逃げました\nなんかの広告","トカゲが逃げました"),
+        ("トカゲ見つけて下さい","なんかの広告\nなんかの広告\nなんかの広告","記事無し"),
+        ]
+    prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
+    prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
+    article_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
+    prompt_fmt = "\n".join( [
+        "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を140文字程度で記述して下さいにゃ。",
+        "",
+        "制約条件：",
+        "・投稿を見た人が興味を持つ内容",
+        "・投稿を見た人から信頼を得られる内容",
+        "・カジュアルな口調で",
+        "・野良猫がニュースを見た感想を述べる",
+        # "・最後にCall to Action(いいねなど)を短く入れる",
+        "",
+        "ターゲット：",
+        "・猫のニュースで癒やされたい人", # （タツイッーで発信ターゲットにしている属性）
+        "・猫ニュースを面白く伝える", # （今回のツイートで発信している対象の属性）
+        "・猫の知られざる世界を見てみたい人", #（上記の対象が課題に感じる場面の具体）
+        "",
+        "出力文:"
+    ] )
+
+    evaluate_prompt = "\n".join([
+        "次に、以下の5つの指標を20点満点で評価してくださいにゃ。",
+        "①話題性：ツイートのトピックが、現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？",
+        "②エンゲージメント促進：ツイートが、ユーザーに反応を促すような要素を含んでいるかにゃ？",
+        "③付加価値：野良猫ならではの視点・感想が含まれているかにゃ？",
+        "④リアリティ:具体的な例や体験が入り信ぴょう性高く独自性があるかにゃ？",
+        "⑤文章の見やすさ:行変えと箇条書きを使い全ての文が20字以内でまとまっているかにゃ？",
+        "",
+        "各指標の評価点数を入力したら、プログラムは自動的に合計点を計算し、それを100点満点で表示するにゃ。",
+        "合計点数：",
+        "",
+        "そして、もっとバズるための改善点を考えてるにゃ",
+        "改善点：",
+    ])
+
+    update_prompt = "上記の改善点を踏まえて、野良猫っぽい出力ツイートを120文字以内で生成するにゃ\n出力文:"
+
+
+    duble_check = {
+        "www.youtube.com": 1,
+        "cat.blogmura.com": 1,
+        "www.thoroughbreddailynews.com": 1
+    }
+    tw_count = 0
     for d in search_results:
         site_title = d.get('title',"")
         site_link = d.get('link',"")
+        site_top = urlparse(site_link).netloc
+
+        if duble_check.get( site_top, None ) is not None:
+            print( f"Skip {site_link}")
+            continue
+
+        if "https://cat.blogmura.com/cat_picture/" == site_link:
+            continue
         if len(site_title)==0 or len(site_link)==0:
             print( f"Error: no title {site_title} {site_link}")
             continue
         if "youtube.com" in site_link:
             print( f"Error: skip youtube {site_title} {site_link}")
+            continue
+        if "karapaia.com" in site_link:
+            print( f"Skip {site_link}")
             continue
 
         site_text: str = module.get_content( site_link, type="title" )
@@ -161,47 +251,139 @@ def neko_news():
             print(site_text)
             continue
 
-        examples = [ 
-            ("トカゲ見つけて下さい","なんかの広告\nトカゲが昨日逃げました\nなんかの広告","トカゲが逃げました"),
-            ("トカゲ見つけて下さい","なんかの広告\nなんかの広告\nなんかの広告","記事無し"),
-            ]
-        prompt_fmt = "下記の記事をフォロワーに紹介するツイートを256文字以内で生成して下さい。\n有効な記事がない場合、記事無しと回答すること。"
-        article_fmt = "記事タイトル:{}\n記事内容:\n{}"
+        if site_text.find("猫")<0 and site_text.find("ねこ")<0 and site_text.find("ネコ")<0 and site_text.find("cats")<0 and site_text.find("Cat")<0:
+            print( f"Error: not found 猫 ")
+            print(site_text)
+            continue
+
+        if site_text.find("販売")>=0 or site_text.find("価格")>=0 or site_text.find("値段")>=0:
+            print( f"Error: found 販売")
+            print(site_text)
+            continue
+
+        if site_text.find("ノミ")>=0:
+            print( f"Error: found ノミ")
+            continue
+
+        #---------------------------
+        # 初期生成
+        #---------------------------
         msg_hist = []
         # for title_data,in_data, out_data in examples:
         #     msg_hist += [ {"role": "system", "content": prompt_fmt.format(title_data) } ]
         #     msg_hist += [ {"role": "user", "content": in_data } ]
         #     msg_hist += [ {"role": "assistant", "content": out_data } ]
 
-        msg_hist += [ {"role": "system", "content": prompt_fmt } ]
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
+        msg_hist += [ {"role": "system", "content": prompt_fmt } ]
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=msg_hist
-        )
-
-        if response is None or response.choices is None or len(response.choices)==0:
-            print( f"Error:invalid response from openai\n{response}")
-            continue
-
-        base_article = response.choices[0]["message"]["content"].strip()
-        
+        base_article = ChatCompletion(msg_hist)
+        base_article = trim_post( base_article );
         if base_article is None or len(base_article)<20:
             print( f"Error: no tweet {site_title} {site_link}\n{base_article}")
             continue
+
+        nn = 1
+        print(f"{nn}回目ツイート内容\n{base_article}")
+
+        for nn in range(1,2):
+            base_article0 = base_article
+            #---------------------------
+            # ツイートを評価する
+            #---------------------------
+            evaluate_msgs = [
+                {"role": "assistant", "content": base_article0 },
+                {"role": "system", "content": evaluate_prompt }
+            ]
+            evaluate_response = ChatCompletion(evaluate_msgs)
+            if evaluate_response is None or len(evaluate_response)<20:
+                print( f"Error: no tweet {site_title} {site_link}\n{evaluate_response}")
+                continue
+
+            if len(base_article0)>129:
+                evaluate_response = evaluate_response+"\n文字数が129文字を超えてるにゃ。"
+
+            print(f"[{nn}回目評価内容]\n{evaluate_response}")
+
+            #---------------------------
+            # ツイートを改善する
+            #---------------------------
+            msg_hist += [ {"role": "assistant", "content": base_article0 } ]
+            msg_hist += [ {"role": "system", "content": evaluate_response } ]
+            msg_hist += [ {"role": "system", "content": update_prompt } ]
+
+            base_article = ChatCompletion(msg_hist)
+            base_article = trim_post( base_article );
+            print(f"[{nn}回目ツイート内容]\n{base_article}")
+
         tweet_text = base_article
         p = tweet_text.find("#")
-        hashtag_list = [ "#猫", "#cat", "#猫好きさんと繋がりたい"]
+        hashtag_list = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#animals", "#funnyanimals"]
         if p>1:
             tweet_text = tweet_text[:p].strip()
         tweet_tags = " ".join(hashtag_list)
-        
+
+        tx = f"{tweet_text}\n\n{site_link}\n\n{tweet_tags}"
+        chars = len(tx);
         print("----------------------------------------------")
         print( f"{tweet_text}" )
         print( f"{site_link}")
         print( f"{tweet_tags}" )
         print("----------------------------------------------")
+
+        if len(tweet_text) > 129:
+            print( f"Error: too long" )
+            continue
+
+
+        if tweet_text.find("猫")<0 and tweet_text.find("ねこ")<0 and tweet_text.find("ネコ")<0:
+            print( f"Error: not found 猫 ")
+            print(tweet_text)
+            continue
+
+        if tweet_text.find("販売")>=0 or tweet_text.find("価格")>=0 or tweet_text.find("値段")>=0:
+            print( f"Error: found 販売")
+            print(tweet_text)
+            continue
+
+        if tweet_text.find("ノミ")>=0:
+            print( f"Error: found ノミ")
+            continue
+
+        # 投稿
+       # tweeter_client.create_tweet(text=tx)
+        duble_check[site_top] = 1
+        tw_count += 1
+        if tw_count>=2:
+            break
+
+def trim_post( content: str ) -> str:
+    if content.startswith("「") and content.endswith("」"):
+        content = content[1:-1]
+    if content.startswith("「" ) and content.endswith("」"):
+        content = content[1:-1]       
+    content = content.replace("[URL]","")
+    content = content.replace("→","")
+    content = content.strip()
+    return content
+
+def ChatCompletion( mesg_list ):
+    response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=mesg_list
+        )
+
+    if response is None or response.choices is None or len(response.choices)==0:
+        print( f"Error:invalid response from openai\n{response}")
+        return None
+
+    content = response.choices[0]["message"]["content"].strip()
+
+    if content is None or len(content)<20:
+        print( f"Error: no tweet \n{content}")
+        return None
+
+    return content
 
 # DALL-Eによる画像生成
 def generate_image(prompt):
@@ -236,6 +418,11 @@ def test():
     print(f" d2: {d2}")
 
 if __name__ == '__main__':
+    homedir=Path.home()
+    if homedir is not None and len(str(homedir))>0:
+        envfile=f"{homedir}/.miyasaburo.conf"
+        if os.path.exists(envfile):
+            load_dotenv( envfile )
     #sys.exit(main(sys.argv))
     #xtest()
     neko_news()
