@@ -20,6 +20,46 @@ class Utils:
                 load_dotenv( envfile )
 
     @staticmethod
+    def str_length( value ) -> int:
+        if value is None:
+            return 0
+        if not isinstance( value, (str) ):
+            value = str(value)
+        return len(value)
+
+    _QUOT_PAIR_ = [ "()",r"{}","<>","「」","「」","【】","（）","『』","［］", "『』" ]
+    @staticmethod
+    def str_unquote( value ) -> str:
+        if value is None:
+            return ""
+        if not isinstance( value, (str) ):
+            value = str(value)
+        value = value.strip()
+        b=True
+        while b and len(value)>=2:
+            b=False
+            while len(value)>=2 and value[0] == value[-1]:
+                b=True
+                value = value[1:-1].strip()
+            for q in Utils._QUOT_PAIR_:
+                if value[0] == q[0] and value[-1] == q[-1]:
+                    b=True
+                    value = value[1:-1].strip()
+
+        return value
+
+    @staticmethod
+    def contains_kana(text):
+        for char in text:
+            # ひらがなのUnicode範囲
+            if '\u3040' <= char <= '\u309F':
+                return True
+            # カタカナのUnicode範囲
+            if '\u30A0' <= char <= '\u30FF':
+                return True
+        return False
+
+    @staticmethod
     def is_empty( text:str=None ) -> bool:
         return text is None or len(text)==0
 
