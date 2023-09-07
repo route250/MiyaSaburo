@@ -1,4 +1,4 @@
-import sys,os,re
+import sys,os,re,time
 import traceback
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
@@ -189,7 +189,7 @@ def neko_news():
     detect_fmt = f"{detect_fmt}3)この記事に日本語の「海外」という単語は含まれていますか？\n"
     detect_fmt = f"{detect_fmt}4)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
-    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画・演劇、公演、アニメーションをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、アニメーションをリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的な思想や思想誘導が含まれていればリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
@@ -199,16 +199,18 @@ def neko_news():
     detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
     detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
     detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
+    detect_fmt = f"{detect_fmt}15)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
+    detect_fmt = f"{detect_fmt}16)記事に複数の記事が含まれますか？(Multi or Singleで回答すること)\n"
 
     article_fmt = "下記の記事をフォロワーに紹介するツイートを生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
-    prompt_fmt = "\n".join( [
+    prompt_fmt1 = "\n".join( [
         "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
         "",
         "制約条件：",
         "・投稿を見た人が興味を持つ内容",
         "・投稿を見た人から信頼を得られる内容",
         "・カジュアルな口調で",
-        "・猫がニュースを見た感想を述べる",
+        "・猫っぽいセリフ",
         # "・最後にCall to Action(いいねなど)を短く入れる",
         "",
         "ターゲット：",
@@ -217,18 +219,44 @@ def neko_news():
         "・猫の知られざる世界を見てみたい人", #（上記の対象が課題に感じる場面の具体）
         "",
         "出力言語:{}",
-        "文字数制限:{}",
+        "文字数制限:{}文字以内",
+        "",
+        "出力文:"
+    ] )
+    prompt_fmt2 = "\n".join( [
+        "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
+        "",
+        "主なポイント:",
+        "あなたがこのツイートで伝えたい主なポイントは何ですか？1-2文で要約して下さい。",
+        "",
+        "ターゲットオーディエンス:",
+        "あなたのツイートのターゲットオーディエンスは誰ですか？(例:若年層、ビジネスマン、健康志向の人など)",
+        "",
+        "読者層:",
+        "ツイートの読者層は誰ですか？特定のでもグラフィック(年齢、性別、場所など)をターゲットにする必要がありますか？それぞれに合わせた魅力的なアプローチを考えてみましょう。",
+        "",
+        "トーンやスタイル:",
+        "あなたが望むトーンやスタイルは何ですかにゃ？(例:面白おかしく、真剣に、感動的になど)",
+        "",
+        "強調:",
+        "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出す。不要な言葉やフレーズがないか確認する。注意を引くメッセージ、感情を喚起する可能性があります。",
+        "",
+        "記述言語(language):",
+        "ツイートは{}で記述して下さいにゃ。",
+        "",
+        "文字数:",
+        "ツイートは{}文字以内にして下さいにゃ。",
         "",
         "出力文:"
     ] )
 
     evaluate_prompt = "\n".join([
         "次に、以下の5つの指標を20点満点で評価してくださいにゃ。",
-        "①話題性：ツイートのトピックが、現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？",
-        "②エンゲージメント促進：ツイートが、ユーザーに反応を促すような要素を含んでいるかにゃ？",
-        "③付加価値：猫の視点、猫の感想が含まれているかにゃ？",
-        "④リアリティ:具体的な例や体験が入り信ぴょう性高く独自性があるかにゃ？",
-        "⑤文章の見やすさ:行変えと箇条書きを使い全ての文が20字以内でまとまっているかにゃ？",
+        "1) 話題性：現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？",
+        "2) エンゲージメント促進：ユーザーに反応を促すような要素を含んでいるかにゃ？",
+        "3) 付加価値：ジョークや皮肉が含まれているかにゃ？",
+        "4) リアリティ:猫っぽいセリフになっているかにゃ？",
+        "5) 文章の見やすさ:簡潔に解りやすい文章になっているかにゃ？",
         "",
         "各指標の評価点数を入力したら、プログラムは自動的に合計点を計算し、それを100点満点で表示するにゃ。",
         "合計点数：",
@@ -243,7 +271,8 @@ def neko_news():
     exclude_site = {
         "www.youtube.com": 1,
         "cat.blogmura.com": 1,
-        "www.thoroughbreddailynews.com": 1
+        "www.thoroughbreddailynews.com": 1,
+        "www.tbs.co.jp": 1,
     }
 
     must_keywords = [
@@ -317,13 +346,19 @@ def neko_news():
         print(detect_result)
         print("-------------------------------------------------------")
 
+        if find_keyword( detect_result, "Single", "Multi" )!=0:
+            print( f"Error: 複数記事 {site_title} {site_link}\n" )
+            continue
         if find_keyword( detect_result, "Cat", "NotCat" )!=0:
             print( f"Error: 猫記事じゃない {site_title} {site_link}\n" )
             continue
-        if find_keyword(detect_result, "Sale", "NotSale")!=0:
-            print( f"Error: 不適切な記事 {site_title} {site_link}\n" )
+        if find_keyword(detect_result, "Media", "NotMedia")!=1:
+            print( f"Error: メディア記事っぽい {site_title} {site_link}\n" )
             continue
-        if find_keyword(detect_result, "Asocial", "NotAsocial")!=0:
+        if find_keyword(detect_result, "Sale", "NotSale")!=1:
+            print( f"Error: 販売っぽい記事 {site_title} {site_link}\n" )
+            continue
+        if find_keyword(detect_result, "Asocial", "NotAsocial")!=1:
             print( f"Error: 不適切な記事 {site_title} {site_link}\n" )
             continue
 
@@ -353,7 +388,7 @@ def neko_news():
         print( f"{site_link}")
         msg_hist = []
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
-        msg_hist += [ {"role": "system", "content": prompt_fmt.format( post_lang, post_limit) } ]
+        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_lang, post_limit) } ]
         base_article = ChatCompletion(msg_hist, temperature=0.7)
         base_article = trim_post( base_article )
         if base_article is None or len(base_article)<20:
@@ -363,7 +398,7 @@ def neko_news():
         tweet_text = None
         tweet_score = 0
         nn = 0
-        nn_max = 3
+        nn_max = 2
         nn_limit = 5
         print(f"{nn}回目ツイート内容:{site_link}\n{base_article}")
 
@@ -377,7 +412,7 @@ def neko_news():
             if len(base_article0)<=post_limit:
                 evaluate_msgs = [
                     {"role": "assistant", "content": base_article0 },
-                    {"role": "system", "content": evaluate_prompt }
+                    {"role": "user", "content": evaluate_prompt }
                 ]
                 evaluate_response = ChatCompletion(evaluate_msgs)
                 if evaluate_response is None or len(evaluate_response)<20:
@@ -405,7 +440,7 @@ def neko_news():
                     score = 0
 
             if len(base_article0)<=post_limit:
-                if score>=tweet_score:
+                if Utils.str_length(tweet_text)<20 or score>=tweet_score:
                     tweet_text = base_article0
                     tweet_score = score
                     if score>=90 or ( nn>1 and score>=80):
@@ -438,6 +473,7 @@ def neko_news():
 
         tx = f"{tweet_text}\n\n{site_link}\n\n{tweet_tags}"
         print("----------------------------------------------")
+        print( f"len:{Utils.str_length(tweet_text)}")
         print( f"{tweet_text}" )
         print( f"{site_link}")
         print( f"{tweet_tags}" )
@@ -458,10 +494,16 @@ def neko_news():
 
 def find_keyword( content:str, a:str, b:str ) -> int:
     if content is not None:
-        if content.find(a)>=0:
-            return 0
-        if content.find(b)>=0:
-            return 1
+        if Utils.str_length(a)>=Utils.str_length(b):
+            if content.find(a)>=0:
+                return 0
+            if content.find(b)>=0:
+                return 1
+        else:
+            if content.find(b)>=0:
+                return 1
+            if content.find(a)>=0:
+                return 0
     return -1
 
 def trim_post( content: str ) -> str:
@@ -486,12 +528,21 @@ def ChatCompletion( mesg_list, temperature=0 ):
         #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
         if openai.api_key is None:
             openai.api_key=os.getenv('OPENAI_API_KEY')
-        response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                temperature = temperature,
-                messages=mesg_list
-            )
-
+        for retry in range(2,-1,-1):
+            try:
+                response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        temperature = temperature,
+                        messages=mesg_list
+                    )
+                break
+            except openai.error.ServiceUnavailableError as ex:
+                if retry>0:
+                    print( f"{ex}" )
+                    time.sleep(5)
+                else:
+                    raise ex
+            
         if response is None or response.choices is None or len(response.choices)==0:
             print( f"Error:invalid response from openai\n{response}")
             return None
@@ -501,6 +552,9 @@ def ChatCompletion( mesg_list, temperature=0 ):
         print( f"{ex}" )
         return None
     except openai.error.InvalidRequestError as ex:
+        print( f"{ex}" )
+        return None
+    except openai.error.ServiceUnavailableError as ex:
         print( f"{ex}" )
         return None
     except Exception as ex:
