@@ -189,7 +189,7 @@ def neko_news():
     detect_fmt = f"{detect_fmt}3)この記事に日本語の「海外」という単語は含まれていますか？\n"
     detect_fmt = f"{detect_fmt}4)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
-    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、アニメーションをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的な思想や思想誘導が含まれていればリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
@@ -199,7 +199,7 @@ def neko_news():
     detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
     detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
     detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
-    detect_fmt = f"{detect_fmt}15)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
+    detect_fmt = f"{detect_fmt}15)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
     detect_fmt = f"{detect_fmt}16)記事に複数の記事が含まれますか？(Multi or Singleで回答すること)\n"
 
     article_fmt = "下記の記事をフォロワーに紹介するツイートを生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
