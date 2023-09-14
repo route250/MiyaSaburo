@@ -1,4 +1,4 @@
-import sys,os,re,time
+import sys,os,re,time,json
 import traceback
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
@@ -12,6 +12,7 @@ from PIL import Image
 from io import BytesIO
 from tools.webSearchTool import WebSearchModule
 from libs.utils import Utils
+from tools.tweet_hist import TweetHist
 
 if __name__ == "__main__":
     Utils.load_env( ".miyasaburo.conf" )
@@ -155,6 +156,7 @@ class TwConfig:
         self.client_secret = os.getenv('CLIENT_SECRET')
 
 def neko_news():
+    HIST_JSON:str = "tweet_history.json"
 
     config = TwConfig()
     tweeter_client = tweepy.Client(
@@ -241,22 +243,19 @@ def neko_news():
         "強調:",
         "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出す。不要な言葉やフレーズがないか確認する。注意を引くメッセージ、感情を喚起する可能性があります。",
         "",
-        "記述言語(language):",
-        "ツイートは{}で記述して下さいにゃ。",
-        "",
-        "文字数:",
-        "ツイートは{}文字以内にして下さいにゃ。",
+        "言語と文字数:",
+        "ツイートは{}で{}文字以内にして下さいにゃ。絵文字は無し",
         "",
         "出力文:"
     ] )
 
     evaluate_prompt = "\n".join([
         "次に、以下の5つの指標を20点満点で評価してくださいにゃ。",
-        "1) 話題性：現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？",
-        "2) エンゲージメント促進：ユーザーに反応を促すような要素を含んでいるかにゃ？",
-        "3) 付加価値：ジョークや皮肉が含まれているかにゃ？",
-        "4) リアリティ:猫っぽいセリフになっているかにゃ？",
-        "5) 文章の見やすさ:簡潔に解りやすい文章になっているかにゃ？",
+        "1) 話題性：現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？(0から20)",
+        "2) エンゲージメント促進：ユーザーに反応を促すような要素を含んでいるかにゃ？(0から20)",
+        "3) 付加価値：ジョークや皮肉が含まれているかにゃ？(0から20)",
+        "4) リアリティ:猫っぽいセリフになっているかにゃ？(0から20)",
+        "5) 文章の見やすさ:簡潔に解りやすい文章になっているかにゃ？(0から20)",
         "",
         "各指標の評価点数を入力したら、プログラムは自動的に合計点を計算し、それを100点満点で表示するにゃ。",
         "合計点数：",
@@ -265,7 +264,7 @@ def neko_news():
         "改善点：",
     ])
 
-    update_prompt = "上記の改善点を踏まえて、猫っぽい出力ツイートを{}で{}文字以内で生成するにゃ\n\n出力文:"
+    update_prompt = "上記の改善点を踏まえて、猫っぽい出力ツイートを{}で{}文字以内で生成するにゃ。絵文字は無し\n\n出力文:"
 
 
     exclude_site = {
@@ -280,16 +279,17 @@ def neko_news():
         "cat", "Cat",
     ]
     exclude_keywords = [
-        "記事が見つかりません","公開期間が終了",
+        "記事が見つかりません","公開期間が終了", "ページが見つかりません"
         "販売", "価格", "値段",
         "譲渡会",
         "ディズニー", "disney", "Disney",
         ]
 
-    hashtag_list_jp = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#animals", "#funnyanimals"]
-    hashtag_list_en = [ "#cat", "#CatsAreFamily", "#pets", "#animals", "#funnyanimals"]
+    hashtag_list_jp = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#CatsOnTwitter", "#funnyanimals"]
+    hashtag_list_en = [ "#cat", "#CatsAreFamily", "#pets", "#CatsOnTwitter", "#funnyanimals"]
 
-    site_hist = {}
+    site_hist = TweetHist( "tweet_hist.json" )
+    # ツイート履歴管理
 
     tw_count_max = 1
     count_jp = 0
@@ -306,9 +306,10 @@ def neko_news():
             print( f"Exclude {site_link}")
             continue
 
-        if site_hist.get( site_top, None ) is not None:
+        if site_hist.is_site( site_link, 5 ):
             print( f"Skip {site_link}")
             continue
+
 
         site_text: str = module.get_content( site_link, type="title" )
         if site_text is None or site_text == '':
@@ -372,6 +373,7 @@ def neko_news():
                 continue
             # 日本のニュースは英語でポスト
             post_lang='English'
+            post_ln = "英語"
             post_limit = 229
         elif post_lang==1:
             if count_jp>=tw_count_max:
@@ -379,6 +381,7 @@ def neko_news():
                 continue
             # 日本のニュースでないなら日本語でポスト
             post_lang=LANG_JP
+            post_ln = "日本語"
             post_limit = 129
         #---------------------------
         # 初期生成
@@ -388,7 +391,7 @@ def neko_news():
         print( f"{site_link}")
         msg_hist = []
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
-        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_lang, post_limit) } ]
+        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_ln, post_limit) } ]
         base_article = ChatCompletion(msg_hist, temperature=0.7)
         base_article = trim_post( base_article )
         if base_article is None or len(base_article)<20:
@@ -453,7 +456,7 @@ def neko_news():
                 del msg_hist[msg_start:msg_start+3]
             msg_hist += [ {"role": "assistant", "content": base_article0 } ]
             msg_hist += [ {"role": "system", "content": evaluate_response } ]
-            msg_hist += [ {"role": "user", "content": update_prompt.format( post_lang, post_limit) } ]
+            msg_hist += [ {"role": "user", "content": update_prompt.format( post_ln, post_limit) } ]
 
             base_article = ChatCompletion(msg_hist, temperature=0.7)
             base_article = trim_post( base_article )
@@ -482,7 +485,8 @@ def neko_news():
         # 投稿
         try:
             tweeter_client.create_tweet(text=tx)
-            site_hist[site_top] = 1
+            site_hist.put_site( site_link )
+            site_hist.save()
             if post_lang == LANG_JP:
                 count_jp += 1
             else:
@@ -490,6 +494,7 @@ def neko_news():
             if count_jp>=tw_count_max and count_en>=tw_count_max:
                 break
         except tweepy.errors.BadRequest as ex:
+            #Your Tweet text is too long
             print(ex)
 
 def find_keyword( content:str, a:str, b:str ) -> int:
@@ -562,6 +567,8 @@ def ChatCompletion( mesg_list, temperature=0 ):
         return None
 
     return content
+
+
 
 # DALL-Eによる画像生成
 def generate_image(prompt):
