@@ -21,7 +21,7 @@ class TweetHist:
     def save(self):
         """ self.histをself.jsonpathに書き込む """
         directory = os.path.dirname(self.jsonpath)
-        if not os.path.exists(directory):
+        if directory is not None and len(directory)>0 and not os.path.exists(directory):
             os.makedirs(directory)
         
         with open(self.jsonpath, 'w', encoding='utf-8') as f:
