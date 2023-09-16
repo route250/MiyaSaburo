@@ -197,7 +197,8 @@ class WebSearchModule:
                 metadata_result.append(zResult)
                 if len(metadata_result) >= num_result:
                     break
-
+        except requests.exceptions.ConnectionError as ex:
+            print(ex)
         except requests.exceptions.RequestException as e:
             logger.exception("")
 
