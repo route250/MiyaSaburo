@@ -13,6 +13,8 @@ from io import BytesIO
 from tools.webSearchTool import WebSearchModule
 from libs.utils import Utils
 from tools.tweet_hist import TweetHist
+from twitter_text import parse_tweet
+
 
 if __name__ == "__main__":
     Utils.load_env( ".miyasaburo.conf" )
@@ -211,42 +213,40 @@ def neko_news():
         "制約条件：",
         "・投稿を見た人が興味を持つ内容",
         "・投稿を見た人から信頼を得られる内容",
-        "・カジュアルな口調で",
-        "・猫っぽいセリフ",
-        # "・最後にCall to Action(いいねなど)を短く入れる",
+        "・カジュアルな野良猫キャラクターのような口調",
         "",
         "ターゲット：",
         "・猫のニュースで癒やされたい人", # （タツイッーで発信ターゲットにしている属性）
         "・猫ニュースを面白く伝える", # （今回のツイートで発信している対象の属性）
         "・猫の知られざる世界を見てみたい人", #（上記の対象が課題に感じる場面の具体）
         "",
-        "出力言語:{}",
-        "文字数制限:{}文字以内",
+        "言語と文字数:",
+        "ツイートは{}で{}文字以内にして下さいにゃ。絵文字は無し",
         "",
-        "出力文:"
+        "ツイート:"
     ] )
     prompt_fmt2 = "\n".join( [
         "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
         "",
-        "主なポイント:",
+        "# 主なポイント:",
         "あなたがこのツイートで伝えたい主なポイントは何ですか？1-2文で要約して下さい。",
         "",
-        "ターゲットオーディエンス:",
+        "# ターゲットオーディエンス:",
         "あなたのツイートのターゲットオーディエンスは誰ですか？(例:若年層、ビジネスマン、健康志向の人など)",
         "",
-        "読者層:",
-        "ツイートの読者層は誰ですか？特定のでもグラフィック(年齢、性別、場所など)をターゲットにする必要がありますか？それぞれに合わせた魅力的なアプローチを考えてみましょう。",
+        "# 読者層:",
+        "ツイートの読者層は誰ですか？特定のグラフィック(年齢、性別、場所など)をターゲットにする必要がありますか？それぞれに合わせた魅力的なアプローチを考えてみましょう。",
         "",
-        "トーンやスタイル:",
+        "# トーンやスタイル:",
         "あなたが望むトーンやスタイルは何ですかにゃ？(例:面白おかしく、真剣に、感動的になど)",
         "",
-        "強調:",
+        "# 強調:",
         "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出す。不要な言葉やフレーズがないか確認する。注意を引くメッセージ、感情を喚起する可能性があります。",
         "",
-        "言語と文字数:",
-        "ツイートは{}で{}文字以内にして下さいにゃ。絵文字は無し",
+        "# 言語と文字数:",
+        "野良猫っぽいツイートを{}で{}文字以内で生成するにゃ。絵文字は無し",
         "",
-        "出力文:"
+        "# ツイート:"
     ] )
 
     evaluate_prompt = "\n".join([
@@ -264,7 +264,7 @@ def neko_news():
         "改善点：",
     ])
 
-    update_prompt = "上記の改善点を踏まえて、猫っぽい出力ツイートを{}で{}文字以内で生成するにゃ。絵文字は無し\n\n出力文:"
+    update_prompt = "上記の改善点を踏まえて、野良猫っぽいツイートを{}で{}文字以内で生成するにゃ。絵文字は無し\n\nツイート:"
 
 
     exclude_site = {
@@ -291,62 +291,75 @@ def neko_news():
     site_hist = TweetHist( "tweet_hist.json" )
     # ツイート履歴管理
 
+    # 類似記事除外リミット
+    sim_limit =0.8
+
     tw_count_max = 1
-    count_jp = 0
-    count_en = 0
+    output_jp = 0
+    output_en = 0
     for d in search_results:
+        if output_jp>=tw_count_max and output_en>=tw_count_max:
+            break
         site_title = d.get('title',"")
         site_link = d.get('link',"")
         site_top = urlparse(site_link).netloc
 
         #---------------------------
-        # 除外判定
+        # サイト判定
         #---------------------------
+        # 除外サイト
         if exclude_site.get( site_top, None ) is not None:
             print( f"Exclude {site_link}")
             continue
-
-        if site_hist.is_site( site_link, 5 ):
+        # 既に使ったサイト
+        if site_hist.is_used( site_link, 5 ):
             print( f"Skip {site_link}")
             continue
-
-
+        print("-------------------------------------------------------")
+        print( f"記事タイトル:{site_title}")
+        print( f"記事URL:{site_link}")
+        #---------------------------
+        # 記事内容判定
+        #---------------------------
+        # 記事本文を取得
         site_text: str = module.get_content( site_link, type="title" )
         if site_text is None or site_text == '':
-            print( f"Error: no article\n{site_title}\n{site_link}\n")
+            print( f"Error: no article")
             continue
-
+        # 単純な言語判定
+        if output_jp>=tw_count_max and not Utils.contains_kana(site_text):
+            print( f"Skip by lang en" )
+            continue
+        # 必須キーワード判定
         a=[ keyword for keyword in must_keywords if site_text.find(keyword)>=0]
         if len(a)==0:
-            print( f"Error: not found 猫\n{site_title}\n{site_link}\n")
-            print(site_text)
+            print( f"Error: not found 猫")
             continue
-
+        # 除外キーワード判定
         a=[ keyword for keyword in exclude_keywords if site_text.find(keyword)>=0]
         if len(a)>0:
-            print( f"Skip: found {a}\n{site_title}\n{site_link}\n")
+            print( f"Skip: exclude keyword {a}")
+            continue
+        # 記事の類似判定
+        embedding = site_hist.get_embedding( site_text, sim_limit )
+        if embedding is None:
+            print( f"Skip by similarity" )
             continue
         #---------------------------
-        # 記事の内容判定
+        # 記事の評価
         #---------------------------
-        print("-------------------------------------------------------")
-        print( f"記事判定:{site_title}")
-        print( f"{site_link}")
-        if count_jp>=tw_count_max and not Utils.contains_kana(site_text):
-            print( f"Skip by lang en {site_title} {site_link}\n" )
-            continue
-        
+        print( f"記事内容評価:")
+        # LLMで内容を評価する
         detect_hist = []
         detect_hist += [ {"role": "user", "content": detect_fmt.format( site_title, site_text[:2000] ) } ]
         detect_result: str = ChatCompletion(detect_hist)
         if detect_result is None or len(detect_result)<20:
-            print( f"Error: no result for detect {site_title} {site_link}\n{detect_result}")
+            print( f"Error: no result for detect \n{detect_result}")
             continue
         detect_result = detect_result.replace('\n\n','\n')
-        print("-------------------------------------------------------")
         print(detect_result)
-        print("-------------------------------------------------------")
-
+        print("--------")
+        # 判定
         if find_keyword( detect_result, "Single", "Multi" )!=0:
             print( f"Error: 複数記事 {site_title} {site_link}\n" )
             continue
@@ -364,138 +377,139 @@ def neko_news():
             continue
 
         #---------------------------
-        # ポスト言語判定
+        # ポスト言語決定
         #---------------------------
         post_lang = find_keyword(detect_result, "InsideJapan", "OutsideJapan")
         if post_lang==0 and Utils.contains_kana(site_text):
-            if count_en>=tw_count_max:
-                print( f"Skip by lang en {site_title} {site_link}\n" )
+            if output_en>=tw_count_max:
+                print( f"Skip by lang en" )
                 continue
             # 日本のニュースは英語でポスト
             post_lang='English'
             post_ln = "英語"
-            post_limit = 229
+            tweet_tags = " ".join(hashtag_list_en)
         elif post_lang==1:
-            if count_jp>=tw_count_max:
-                print( f"Skip by lang jp {site_title} {site_link}\n" )
+            if output_jp>=tw_count_max:
+                print( f"Skip by lang jp" )
                 continue
             # 日本のニュースでないなら日本語でポスト
             post_lang=LANG_JP
             post_ln = "日本語"
-            post_limit = 129
+            tweet_tags = " ".join(hashtag_list_jp)
+
+        # ツイート文字数制限
+        tags_count = count_tweet( " " + site_link + " " + tweet_tags )
+        count_limit = 280 - tags_count
+        if post_lang==LANG_JP:
+            chars_limit = int(count_limit/2)
+        else:
+            chars_limit = int(count_limit*0.8)
         #---------------------------
         # 初期生成
         #---------------------------
         print("-------------------------------------------------------")
-        print( f"生成:{site_title}")
-        print( f"{site_link}")
+        print( f"記事タイトル:{site_title}")
+        print( f"記事URL:{site_link}")
         msg_hist = []
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
-        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_ln, post_limit) } ]
-        base_article = ChatCompletion(msg_hist, temperature=0.7)
-        base_article = trim_post( base_article )
-        if base_article is None or len(base_article)<20:
-            print( f"Error: no tweet {base_article}")
-            continue
+        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_ln, chars_limit) } ]
 
         tweet_text = None
         tweet_score = 0
-        nn = 0
-        nn_max = 2
-        nn_limit = 5
-        print(f"{nn}回目ツイート内容:{site_link}\n{base_article}")
+        tweet_count = 0
+        try_count = 0
+        try_max = 2
+        try_max_limit = 5
 
+        score_pattern = re.compile(r'合計点数[^\d]*(\d+)[点/]')
         msg_start = len(msg_hist)
-        while nn <= nn_max and nn <= nn_limit:
-            nn += 1
-            base_article0 = base_article
+
+        while try_count <= try_max:
+            try_count += 1
+            print( f"{try_count}回目 ポスト生成")
+            base_article = ChatCompletion(msg_hist, temperature=0.7)
+            base_article = trim_post( base_article )
+            base_count = count_tweet(base_article)
+            print(f"{try_count}回目 生成結果\n{base_article}")
+            if base_count<20:
+                print( f"Error: no tweet {base_article}")
+                break
             #---------------------------
             # ツイートを評価する
             #---------------------------
-            if len(base_article0)<=post_limit:
+            score = 0
+            if base_count<=count_limit:
                 evaluate_msgs = [
-                    {"role": "assistant", "content": base_article0 },
+                    {"role": "assistant", "content": base_article },
                     {"role": "user", "content": evaluate_prompt }
                 ]
                 evaluate_response = ChatCompletion(evaluate_msgs)
                 if evaluate_response is None or len(evaluate_response)<20:
-                    print( f"Error: result {site_title} {site_link}\n{evaluate_response}")
+                    print( f"Error: result \n{evaluate_response}")
                     break
+                #---------------------------
+                # 点数と文字数判定
+                #---------------------------
+                point_result = score_pattern.search(evaluate_response)
+                if point_result is not None:
+                    score=int(point_result.group(1))
+                    print(f"検出結果:{point_result.group(0)} -> {score}")
+                    if score < 0 or 100 < score:
+                        score = 0
             else:
                 if post_lang == LANG_JP:
-                    evaluate_response = f"文字数が{post_limit}文字を超えてるにゃ。文字数を減らして欲しいにゃ。"
+                    evaluate_response = f"文字数が{chars_limit}文字を超えてるにゃ。文字数を減らして欲しいにゃ。"
                 else:
-                    evaluate_response = f"The number of characters in the tweet is {len(base_article0)}. Tweet briefly. Tweet within {post_limit} characters. Make it shorter."
-                nn_max += 1
+                    evaluate_response = f"The number of characters in the tweet is {base_count}. Tweet briefly. Tweet within {chars_limit} characters. Make it shorter."
+                score = -1
+                if try_max < try_max_limit:
+                    try_max += 1
 
-            print(f"[{nn}回目評価内容]\n{evaluate_response}")
+            print(f"[{try_count}回目 評価内容]\n{evaluate_response}\n評価点数 {score}点")
 
-            #---------------------------
-            # 点数と文字数判定
-            #---------------------------
-            score = 0
-            pattern = re.compile(r'合計点数[^\d]*(\d+)[点/]')
-            point_result = pattern.search(evaluate_response)
-            if point_result is not None:
-                score=int(point_result.group(1))
-                print(f"検出結果:{point_result.group(0)} -> {score}")
-                if score < 0 or 100 < score:
-                    score = 0
+            # ハイスコアを更新する
+            if base_count<=count_limit and ( tweet_count<20 or score>=tweet_score ):
+                tweet_text = base_article
+                tweet_count = base_count
+                tweet_score = score
 
-            if len(base_article0)<=post_limit:
-                if Utils.str_length(tweet_text)<20 or score>=tweet_score:
-                    tweet_text = base_article0
-                    tweet_score = score
-                    if score>=90 or ( nn>1 and score>=80):
-                        break
+            if tweet_score>=90 or ( try_count>1 and tweet_score>=80 ) or ( try_count>=try_max and tweet_score>0 ):
+                #---------------------------
+                # ツイートする
+                #---------------------------
+                twtext = f"{tweet_text}\n\n{site_link}\n\n{tweet_tags}"
+                print("-----------投稿")
+                print( f"len:{tweet_count} score:{tweet_score}")
+                print( f"post:{tweet_text}" )
+                try:
+                   # tweeter_client.create_tweet(text=twtext)
+                    site_hist.put_site( site_link, site_text, embedding )
+                    if post_lang == LANG_JP:
+                        output_jp += 1
+                    else:
+                        output_en += 1
+                    break
+                except tweepy.errors.BadRequest as ex:
+                    #Your Tweet text is too long
+                    #You are not allowed to create a Tweet with duplicate content.
+                    print(ex)
 
             #---------------------------
             # ツイートを改善する
             #---------------------------
-            if nn>=3:
-                del msg_hist[msg_start:msg_start+3]
-            msg_hist += [ {"role": "assistant", "content": base_article0 } ]
-            msg_hist += [ {"role": "system", "content": evaluate_response } ]
-            msg_hist += [ {"role": "user", "content": update_prompt.format( post_ln, post_limit) } ]
+            print( f"ポスト修正")
+            if try_count>=3:
+                del msg_hist[msg_start:msg_start+2]
+            msg_hist += [ {"role": "assistant", "content": base_article } ]
+            msg_hist += [ {"role": "user", "content": evaluate_response + "\n\n" + update_prompt.format( post_ln, chars_limit) } ]
 
-            base_article = ChatCompletion(msg_hist, temperature=0.7)
-            base_article = trim_post( base_article )
-            print(f"[{nn}回目ツイート内容]\n{base_article}")
 
-        if Utils.str_length( tweet_text ) < 20:
-            print( f"Error: no tweet" )
-            continue
-        if tweet_text is None or len(tweet_text)>post_limit:
-            print( f"Error: tweet too long" )
-            continue
-
-        if post_lang == LANG_JP:
-            tweet_tags = " ".join(hashtag_list_jp)
-        else:
-            tweet_tags = " ".join(hashtag_list_en)
-
-        tx = f"{tweet_text}\n\n{site_link}\n\n{tweet_tags}"
-        print("----------------------------------------------")
-        print( f"len:{Utils.str_length(tweet_text)}")
-        print( f"{tweet_text}" )
-        print( f"{site_link}")
-        print( f"{tweet_tags}" )
-        print("----------------------------------------------")
-
-        # 投稿
-        try:
-            tweeter_client.create_tweet(text=tx)
-            site_hist.put_site( site_link )
-            site_hist.save()
-            if post_lang == LANG_JP:
-                count_jp += 1
-            else:
-                count_en += 1
-            if count_jp>=tw_count_max and count_en>=tw_count_max:
-                break
-        except tweepy.errors.BadRequest as ex:
-            #Your Tweet text is too long
-            print(ex)
+def count_tweet( text: str ) -> int:
+    try:
+        ret = parse_tweet(text)
+        return ret.weightedLength
+    except:
+        return 0
 
 def find_keyword( content:str, a:str, b:str ) -> int:
     if content is not None:

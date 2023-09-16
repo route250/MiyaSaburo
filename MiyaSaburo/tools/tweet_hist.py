@@ -2,6 +2,8 @@ import json
 import os
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
+import openai
+from openai.embeddings_utils import cosine_similarity
 
 class TweetHist:
 
@@ -13,15 +15,19 @@ class TweetHist:
     def load(self):
         """ self.jsonpathがあれば、self.histに読み込む。なければ読まない"""
         if os.path.exists(self.jsonpath):
-            with open(self.jsonpath, 'r') as f:
+            with open(self.jsonpath, 'r', encoding='utf-8') as f:
                 self.hist = json.load(f)
 
     def save(self):
         """ self.histをself.jsonpathに書き込む """
-        with open(self.jsonpath, 'w') as f:
-            json.dump(self.hist, f)
+        directory = os.path.dirname(self.jsonpath)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        with open(self.jsonpath, 'w', encoding='utf-8') as f:
+            json.dump(self.hist, f, indent=4, ensure_ascii=False)
 
-    def is_site(self, url: str, days: int) -> bool:
+    def is_used(self, url: str, days: int) -> bool:
         """ days日以内に、urlのサイトの記事を使ったか？ """
         hostname = urlparse(url).netloc
         if hostname in self.hist['site']:
@@ -30,7 +36,25 @@ class TweetHist:
                 return True
         return False
 
-    def put_site(self, url: str) -> None:
+    def get_embedding(self, content: str, limit: float = 0.8) -> list[float]:
+        """ contentと似た記事がなければ記録してFalseを返す。似た記事があればTrueを返す"""
+        embedding = to_embedding( content )
+        if leng(embedding) != 1:
+            return None
+        embedding=embedding[0]
+        if leng(embedding)<10:
+            return None
+
+        # Check similarity with existing embeddings. This is also a dummy check.
+        for article in self.hist['article']:
+            embB = article.get('embedding',None)
+            if embB is not None:
+                sim = cosine_similarity( embedding, embB )
+                if sim>=limit:
+                    return None
+        return embedding
+
+    def put_site(self, url: str, content: str, embedding: list[float] ) -> None:
         """ urlのホスト名、日時、回数を記録する """
         hostname = urlparse(url).netloc
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
@@ -39,23 +63,21 @@ class TweetHist:
             self.hist['site'][hostname]['time'] = current_time  # timeを更新
         else:
             self.hist['site'][hostname] = {'time': current_time, 'count': 1}
-        self.save()
-
-    def put_article(self, content: str, limit: float = 0.8) -> bool:
-        """ contentと似た記事がなければ記録してFalseを返す。似た記事があればTrueを返す"""
-        # TODO: Convert content to embedding. For simplicity, this step is not implemented.
-        embedding = content  # This is a dummy. Convert this to a real embedding
-
-        # Check similarity with existing embeddings. This is also a dummy check.
-        for article in self.hist['article']:
-            # TODO: Replace this with a real similarity check
-            if embedding == article['embedding']:
-                return True
-
-        # If no similar article found, record the new article
+        # 記事のembeddingを記録する
         self.hist['article'].append({
-            'time': datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+            'time': current_time,
+            'url': url,
             'embedding': embedding
         })
         self.save()
-        return False
+
+def leng( value ) -> int:
+    try:
+        if value is not None:
+            return len(value)
+    except:
+        return 0
+    
+def to_embedding( input ):
+    res = openai.Embedding.create(input=input, model="text-embedding-ada-002")
+    return [data.get('embedding',None) for data in res.get('data',[])]
