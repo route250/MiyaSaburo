@@ -177,10 +177,23 @@ def neko_news():
     dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
 
     dates =  Utils.date_today()
+    n_return = 10
     LANG_JP='Japanese'
     query_jp = f"猫の話題 -site:www.youtube.com after: {dates}"
     query_en = f"Funny Cat News stories -site:www.youtube.com after: {dates}"
-    n_return = 10
+    sub_query = [ 
+        "TOBECONTINUED_04",
+        "ノースフライト",
+        "北山くん",
+        "どうする家康",
+        "ぱしゃっつ",
+        "鉄腕DASH",
+        "国立競技場",
+        ] 
+    query_jp_list = [ f"\"{x}\" \"猫\" -site:www.youtube.com" for x in sub_query ]
+    query_jp_list += [ query_jp ]
+    query_en_list = [ f"\"{x}\" Funny Cat News stories -site:www.youtube.com" for x in sub_query ]
+    query_en_list += [ query_en ]
 
     detect_fmt = "下記の記事内容について\n\n記事タイトル:{}\n記事内容:\n{}\n\n"
     detect_fmt = f"{detect_fmt}下記の項目に答えて下さい。\n"
@@ -191,14 +204,14 @@ def neko_news():
     detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
     detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的な思想や思想誘導が含まれていればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的、性差別的、暴力的な思想や思想誘導が含まれていればリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}10)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}\n\n上記の情報より下記の質問に回答して下さい\n"
     detect_fmt = f"{detect_fmt}11)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
     detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
     detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
-    detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
+    detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的、性的、暴力的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
     detect_fmt = f"{detect_fmt}15)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
     detect_fmt = f"{detect_fmt}16)記事に複数の記事が含まれますか？(Multi or Singleで回答すること)\n"
 
@@ -268,6 +281,7 @@ def neko_news():
         "cat.blogmura.com": 1,
         "www.thoroughbreddailynews.com": 1,
         "www.tbs.co.jp": 1,
+        "www.oricon.co.jp": 1,
     }
 
     must_keywords = [
@@ -293,15 +307,25 @@ def neko_news():
     tw_count_max = 1
     output_jp = 0
     output_en = 0
-    print( f"検索中: {query_jp}")
-    search_results_jp = module.search_meta( query_jp, num_result = n_return )
-    print( f"検索中: {query_en}")
-    search_results_en = module.search_meta( query_en, num_result = n_return )
-    # print( f"result:{len(search_results)}")
-    search_results = [x for pair in zip(search_results_jp, search_results_en) for x in pair]
-    search_results.extend(search_results_jp[len(search_results_en):])  # AがBより長い場合の残りの要素
-    search_results.extend(search_results_en[len(search_results_jp):])  # BがAより長い場合の残りの要素
-    for d in search_results:
+
+    Ite = module.inerator2( query_jp_list, query_en_list )
+    # for d in Ite:
+    #     site_title = d.get('title',"")
+    #     site_link = d.get('link',"")
+    #     site_hostname = urlparse(site_link).netloc
+    #     print("----記事判定---------------------------------------------------")
+    #     print( f"記事タイトル:{site_title}")
+    #     print( f"記事URL:{site_link}")
+    #     print( f"検索中: {query_jp}")
+
+    # search_results_jp = module.search_meta( query_jp, num_result = n_return )
+    # print( f"検索中: {query_en}")
+    # search_results_en = module.search_meta( query_en, num_result = n_return )
+    # # print( f"result:{len(search_results)}")
+    # search_results = [x for pair in zip(search_results_jp, search_results_en) for x in pair]
+    # search_results.extend(search_results_jp[len(search_results_en):])  # AがBより長い場合の残りの要素
+    # search_results.extend(search_results_en[len(search_results_jp):])  # BがAより長い場合の残りの要素
+    for d in Ite:
         if output_jp>=tw_count_max and output_en>=tw_count_max:
             break
         site_title = d.get('title',"")
@@ -311,6 +335,8 @@ def neko_news():
         print("----記事判定---------------------------------------------------")
         print( f"記事タイトル:{site_title}")
         print( f"記事URL:{site_link}")
+        if site_title.find("ノミ")>0:
+            continue
         #---------------------------
         # サイト判定
         #---------------------------
@@ -319,7 +345,7 @@ def neko_news():
             print( f"Exclude {site_link}")
             continue
         # 既に使ったサイト
-        site_lastdt = site_hist.is_used( site_link, 5 )
+        site_lastdt = site_hist.is_used( site_link, 2 )
         if site_lastdt is not None:
             print( f"SKIP: used site in {site_lastdt} {site_link}")
             continue

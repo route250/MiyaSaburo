@@ -7,6 +7,7 @@ import requests
 import lxml.html as html
 from lxml.html import HtmlMixin, HtmlElement, HtmlComment, TextareaElement, HtmlEntity
 import urllib.parse
+from urllib.parse import urlparse
 from enum import Enum
 from pydantic import Field, BaseModel
 from langchain.tools.base import BaseTool
@@ -515,6 +516,96 @@ class WebSearchModule:
             text_list.append(buffer)
             buffer = ""
         return "\n".join(text_list)
+
+    # -----------------------------------------------------------------
+    # イテレーター
+    # -----------------------------------------------------------------
+    def inerator( self, query_list: list[str], num_result = 10 ):
+        Ite: WebSearchModule.ResultIterator = self.ResultIterator(query_list,num_result=num_result )
+        return Ite
+
+    class ResultIterator(object):
+
+        def __init__(self, query_list: list[str], num_result = 10 ):
+            self.module : WebSearchModule = WebSearchModule()
+            self.num_result = num_result
+            self.res_list = []
+            self.res_index = 0
+            self.query_list = query_list
+            self.query_index = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            ret = self.next()
+            if ret is None:
+                raise StopIteration()
+            else:
+                return ret
+
+        def next(self):
+            ret = None
+            while ret is None:
+                while self.res_index>=len(self.res_list):
+                    if self.query_index<len(self.query_list):
+                        query = self.query_list[self.query_index]
+                        self.query_index += 1
+                        self.res_index = 0
+                        self.res_list = self.search_meta( query )
+                    else:
+                        return None
+                ret = self.res_list[self.res_index]
+                self.res_index += 1
+                # youtubeは除外
+                site_link = ret.get('link',"")
+                hostname = urlparse(site_link).netloc if site_link is not None or len(site_link)>1 else None
+                if hostname is None or len(hostname)<1 or not any(c.isalpha() for c in hostname):
+                    ret = None
+                elif hostname.find("youtube")>=0:
+                    ret = None
+            return ret
+
+        def search_meta( self, query: str ):
+            print( f"[検索中] {query}" )
+            results = None
+            try:
+                results = self.module.search_meta( query, num_result = self.num_result )
+            except Exception as ex:
+                print(ex)
+            if results is None:
+                results = []
+            return results
+
+    def inerator2( self, q1: list[str], q2: list[str], num_result = 10 ):
+        Ite1: WebSearchModule.ResultIterator = self.ResultIterator(q1,num_result=num_result )
+        Ite2: WebSearchModule.ResultIterator = self.ResultIterator(q2,num_result=num_result )
+        return WebSearchModule.MultiIterator( [ Ite1, Ite2 ] )
+
+    class MultiIterator(object):
+
+        def __init__(self, ite_list: list):
+            self.ite_list = ite_list
+            self.ite_index = 0
+
+        def __iter__(self):
+            return self
+
+        def xget(self):
+            try:
+                return self.ite_list[self.ite_index].__next__()
+            except:
+                return None
+
+        def __next__(self):
+            ret = None
+            while ret is None:
+                ret = self.xget()
+                self.ite_index = (self.ite_index + 1) % len(self.ite_list)
+                if ret is None and self.ite_index==0:
+                    raise StopIteration()
+            return ret
+    
 
 #------------------------------------------------------------------------------
 # clear tags
