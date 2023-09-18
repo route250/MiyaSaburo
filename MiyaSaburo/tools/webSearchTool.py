@@ -41,7 +41,7 @@ class WebSearchModule:
         "https://www.jma.go.jp/bosai/forecast/","https://www.jma.go.jp/bosai/map.html",
         "https://www.jma-net.go.jp/",
         "https://s.n-kishou.co.jp/w/charge/","https://weather.yahoo.co.jp/",
-        "https://twitter.com"
+        "https://twitter.com","https://www.instagram.com","https://www.facebook.com"
     )
     DEFAULT_NUM_RESULT: int = 4
 
@@ -214,6 +214,17 @@ class WebSearchModule:
         # requestsを使用してWebページを取得
         response = requests.get(link, timeout=timeout, headers={"User-Agent": user_agent})
         return response.content
+    
+    def get_content_as_html( self, link: str,*, user_agent = None, timeout = None, type:str='htag' ) -> HtmlElement:
+        try:
+            b: bytes = self.get_content_bin( link, user_agent=user_agent, timeout=timeout)
+            zDocument = HtmlUtil.bytes_to_document( b )
+            return zDocument
+        except requests.exceptions.SSLError:
+            logger.error( f"SSLError url:{link}")
+        except Exception as e:
+            logger.exception("Error occured while getting content from URL: {0}. Error: {1}".format(link, str(e)))
+        return ""
 
     def get_content(self, link: str, *, user_agent = None, timeout = None, type:str='htag' ) -> str:
         try:
@@ -526,9 +537,10 @@ class WebSearchModule:
 
     class ResultIterator(object):
 
-        def __init__(self, query_list: list[str], num_result = 10 ):
+        def __init__(self, query_list: list[str], num_result = 10, qdr=None ):
             self.module : WebSearchModule = WebSearchModule()
             self.num_result = num_result
+            self.qdr = qdr
             self.res_list = []
             self.res_index = 0
             self.query_list = query_list
@@ -570,16 +582,16 @@ class WebSearchModule:
             print( f"[検索中] {query}" )
             results = None
             try:
-                results = self.module.search_meta( query, num_result = self.num_result )
+                results = self.module.search_meta( query, num_result = self.num_result, qdr=self.qdr )
             except Exception as ex:
                 print(ex)
             if results is None:
                 results = []
             return results
 
-    def inerator2( self, q1: list[str], q2: list[str], num_result = 10 ):
-        Ite1: WebSearchModule.ResultIterator = self.ResultIterator(q1,num_result=num_result )
-        Ite2: WebSearchModule.ResultIterator = self.ResultIterator(q2,num_result=num_result )
+    def inerator2( self, q1: list[str], q2: list[str], num_result = 10, qdr=None ):
+        Ite1: WebSearchModule.ResultIterator = self.ResultIterator(q1,num_result=num_result, qdr=qdr )
+        Ite2: WebSearchModule.ResultIterator = self.ResultIterator(q2,num_result=num_result, qdr=qdr )
         return WebSearchModule.MultiIterator( [ Ite1, Ite2 ] )
 
     class MultiIterator(object):

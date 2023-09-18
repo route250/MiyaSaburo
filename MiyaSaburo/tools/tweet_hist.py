@@ -21,7 +21,7 @@ class TweetHist:
     def __init__(self, jsonpath: str):
         self.hist = {'site': {}, 'article': []}
         self.jsonpath = jsonpath
-       # self.load()
+        self.load()
 
     def load(self):
         """ self.jsonpathがあれば、self.histに読み込む。なければ読まない"""
@@ -70,11 +70,13 @@ class TweetHist:
         """ urlのホスト名、日時、回数を記録する """
         hostname = urlparse(url).netloc
         current_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-        if hostname in self.hist['site']:
-            self.hist['site'][hostname]['count'] += 1
-            self.hist['site'][hostname]['time'] = current_time  # timeを更新
+        site_map = self.hist['site']
+        item = site_map.get(hostname,None)
+        if item is None:
+            site_map[hostname] = {'time': current_time, 'count': 1}
         else:
-            self.hist['site'][hostname] = {'time': current_time, 'count': 1}
+            item['count'] += 1
+            item['time'] = current_time  # timeを更新
         # 記事のembeddingを記録する
         self.hist['article'].append({
             'time': current_time,

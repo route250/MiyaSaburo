@@ -14,6 +14,7 @@ from tools.webSearchTool import WebSearchModule
 from libs.utils import Utils
 from tools.tweet_hist import TweetHist
 from twitter_text import parse_tweet
+from lxml.html import  HtmlElement, HtmlComment, HtmlMixin, HtmlEntity
 
 if __name__ == "__main__":
     pre = os.getenv('OPENAI_API_KEY')
@@ -23,126 +24,7 @@ if __name__ == "__main__":
         print("UPDATE OPENAI_API_KEY")
         openai.api_key=after
 
-def to_embedding( input ):
-    res = openai.Embedding.create(input=input, model="text-embedding-ada-002")
-    return [data.get('embedding',None) for data in res.get('data',[])]
-
 tk_encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
-
-def fsplit_contents( text_all, split_size=2000, oerlap=200 ):
-    tk_all = tk_encoder.encode(text_all)
-    size_all =  len(tk_all)
-    p = 0
-    step = 2000
-    overlap = 200
-    results = []
-    while p<size_all:
-        info_list = tk_all[p:p+step]
-        contents = tk_encoder.decode(info_list)
-        results.append( (len(info_list),contents) )
-        p = p + step - overlap
-    return results
-
-def neko_neko_network():
-    #baselist=["猫が迷子","猫が行方不明","猫が家出","猫が帰ってきました","猫を探して"]
-    #base_emg_list  = to_embedding(baselist)
-    
-    module : WebSearchModule = WebSearchModule()
-    dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
-
-    query = f"( 猫 OR ねこ OR ネコ) ( 迷子 OR 脱走 OR 行方不明 )"
-    query = f"( 猫 OR ねこ OR ネコ) ( 迷子 OR 脱走 OR 行方不明 ) ( {' OR '.join(dates)} )"
-
-    n_return = 10
-    search_results = module.search_meta( query, num_result = n_return )
-    print( f"result:{len(search_results)}")
-
-
-    prompt = "上記の文章から迷い猫の情報を以下の表にまとめて下さい。"
-    table = "|日付|場所|猫の名前|猫の特徴|状況、行方不明,見つかりました,里親募集,里親決定|その他|\n|----|----|----|----|----|\n|2023-08-03|東京都多摩川区|みーちゃん|真っ白な毛並み|行方不明|ふらっと出掛けたきり帰って来ません|\n|2023-08-03|大阪府西成区|こてつ|虎縞|見つかりました|難波で飲みつぶれているところを保護しました|\n"
-    prompt = "上記の文章から迷い猫の情報を下記の例に従って抽出して下さい。"
-    filters = {
-        "日付": "2023/08/04 又は 不明",
-        "状況":"行方不明、見つかりました、里親募集、里親決定、など",
-        "場所":"市町村など",
-        "名前":"猫の名前 又は 未定",
-        "品種":"雑種 ベンガル等",
-        "毛色":"三毛、白、黒、とら縞など",
-        "性別":"オス 又は メス",
-        "年齢":"推定１歳８ヶ月",
-        "その他特徴":"呼びかけると「おっす」と返事します。セミを取りに行くと出ていったきり帰ってきません",
-        "掲載サイト":"情報へのリンクがあれば記載" 
-    }
-    table ="例)"
-    for k,v in filters.items():
-        table = f"{table}\n{k}: {v}"
-
-    info_list = []
-
-    for d in search_results:
-        site_title = d.get('title',"")
-        site_link = d.get('link',"")
-        if len(site_title)==0 or len(site_link)==0:
-            continue
-        print("----")
-        print( f"{site_title} {site_link}")
-        site_text = module.get_content( site_link )
-        if site_text is None:
-            continue
-        print( f"--- split" )
-        split_contents = fsplit_contents( site_text )
-        idx = 0
-        for tokens, context in split_contents:
-            idx += 1
-            print(f"--- completion:{idx}/{len(split_contents)}")
-            try:
-                completion = openai.ChatCompletion.create( model = "gpt-3.5-turbo",  
-                        messages = [
-                            { "role":"user", "content": prompt + "\n\n\n" + context+ "\n\n\n" + prompt + "\n\n" + table },
-                            # { "role":"system", "content": f"{prompt}\n{table}" },
-                        ],
-                        max_tokens  = 3400-tokens, n = 1, stop = None, temperature = 0.0, 
-                )
-            except Exception as ex:
-                print(ex)
-                continue
-            
-            # 応答
-            response = completion.choices[0].message.content
-            # 集計
-            print(f"--- parse:{idx}/{len(split_contents)}")
-            info = {}
-            for line in response.split("\n"):
-                kv = line.split(':',1)
-                key: str = None
-                value: str = ''
-                if len(kv)==2:
-                    key = kv[0].strip()
-                    value = kv[1].strip()
-                    if key=="日付":
-                        value = Utils.date_from_str(value)
-                    elif not value or "不明"==value or "未定"==value:
-                        value = ''
-                if key and key in filters:
-                    if value and len(value)>0:
-                        print( f"hit    {line}")
-                        info[key] = value
-                    else:
-                        print( f"skip   {line}")
-                else:
-                        print( f"ignore {line}")
-                        if len(info)>0 and "日付" in info:
-                            info['title'] = site_title
-                            info['link'] = site_link
-                            info_list.append(info)
-                            info = {}
-            if len(info)>0:
-                info_list.append(info)
-                info = {}
-    for info in info_list:
-        if info.get('日付',"") in dates:
-            print("\n\n")
-            print(info)
 
 ##以下箇所は取得したAPI情報と置き換えてください。
 class TwConfig:
@@ -176,20 +58,24 @@ def neko_news():
     module : WebSearchModule = WebSearchModule()
     dates = [ Utils.date_today(), Utils.date_today(-1), Utils.date_today(-2)]
 
-    dates =  Utils.date_today()
+    dates =  Utils.date_today(-60)
     n_return = 10
     LANG_JP='Japanese'
-    query_jp = f"猫の話題 -site:www.youtube.com after: {dates}"
-    query_en = f"Funny Cat News stories -site:www.youtube.com after: {dates}"
-    sub_query = [ 
-        "TOBECONTINUED_04",
-        "ノースフライト",
-        "北山くん",
-        "どうする家康",
-        "ぱしゃっつ",
-        "鉄腕DASH",
-        "国立競技場",
-        ] 
+    query_jp = f"猫の話題 -site:www.youtube.com after:{dates}"
+    query_en = f"Funny Cat News stories -site:www.youtube.com after:{dates}"
+
+    go_tweet = True
+    # トレンドキーワードを収集する
+    trand_link:str = "https://search.yahoo.co.jp/realtime"
+    sub_query = []
+    try:
+        # requestsを使用してWebページを取得
+        response_html: HtmlElement = module.get_content_as_html( trand_link )
+        tag_list = response_html.xpath("/html/body/div/div/div/div/div/div/article[h1/text()='トレンド']/section/ol/li/a/article/h1") 
+        sub_query = [ tag.text_content() for tag in tag_list[:5]]
+    except:
+        pass
+
     query_jp_list = [ f"\"{x}\" \"猫\" -site:www.youtube.com" for x in sub_query ]
     query_jp_list += [ query_jp ]
     query_en_list = [ f"\"{x}\" Funny Cat News stories -site:www.youtube.com" for x in sub_query ]
@@ -257,6 +143,24 @@ def neko_news():
         "",
         "# ツイート:"
     ] )
+    prompt_fmt2 = "\n".join( [
+        "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
+        "",
+        "# トーンやスタイル:",
+        "この記事のトーンやスタイルは何ですかにゃ？(例:面白おかしく、真剣に、感動的になど)",
+        "",
+        "# 主なポイント:",
+        "あなたがこのツイートで伝えたい主なポイントは何ですか？1-2文で要約して下さい。",
+        "",
+        "# 強調:",
+        "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出して下さい。",
+        "",
+        "# 言語と文字数:",
+        "野良猫っぽい皮肉やジョークを含めたツイートを{}で{}文字以内で生成するにゃ。絵文字は無し",
+        "",
+        "# ツイート:"
+    ] )
+
 
     evaluate_prompt = "\n".join([
         "次に、以下の5つの指標を20点満点で評価してくださいにゃ。",
@@ -290,8 +194,8 @@ def neko_news():
     ]
     exclude_keywords = [
         "記事が見つかりません","公開期間が終了", "ページが見つかりません"
-        "販売", "価格", "値段",
-        "譲渡会",
+        "販売", "価格", "値段", "譲渡会",
+        "TBS","MBS","出演","テレビ局", "配信","放送",
         "ディズニー", "disney", "Disney",
         ]
 
@@ -309,22 +213,6 @@ def neko_news():
     output_en = 0
 
     Ite = module.inerator2( query_jp_list, query_en_list )
-    # for d in Ite:
-    #     site_title = d.get('title',"")
-    #     site_link = d.get('link',"")
-    #     site_hostname = urlparse(site_link).netloc
-    #     print("----記事判定---------------------------------------------------")
-    #     print( f"記事タイトル:{site_title}")
-    #     print( f"記事URL:{site_link}")
-    #     print( f"検索中: {query_jp}")
-
-    # search_results_jp = module.search_meta( query_jp, num_result = n_return )
-    # print( f"検索中: {query_en}")
-    # search_results_en = module.search_meta( query_en, num_result = n_return )
-    # # print( f"result:{len(search_results)}")
-    # search_results = [x for pair in zip(search_results_jp, search_results_en) for x in pair]
-    # search_results.extend(search_results_jp[len(search_results_en):])  # AがBより長い場合の残りの要素
-    # search_results.extend(search_results_en[len(search_results_jp):])  # BがAより長い場合の残りの要素
     for d in Ite:
         if output_jp>=tw_count_max and output_en>=tw_count_max:
             break
@@ -354,7 +242,7 @@ def neko_news():
         #---------------------------
         # 記事本文を取得
         print( f"記事の本文取得....")
-        site_text: str = module.get_content( site_link, type="title" )
+        site_text: str = module.get_content( site_link, type="title", timeout=15 )
         if site_text is None or site_text == '':
             print( f"ERROR: 本文の取得に失敗")
             continue
@@ -374,7 +262,7 @@ def neko_news():
             continue
         # 記事の類似判定
         print( f"記事のembedding取得....")
-        embedding = site_hist.get_embedding( site_text, sim_limit )
+        embedding = site_hist.get_embedding( site_text[:2000], sim_limit )
         if embedding is None:
             print( f"SKIP: 類似記事をツイート済み" )
             continue
@@ -527,8 +415,9 @@ def neko_news():
                 print( f"len:{tweet_count} score:{tweet_score}")
                 print( f"post:{tweet_text}" )
                 try:
-                    tweeter_client.create_tweet(text=twtext)
-                    site_hist.put_site( site_link, site_text, embedding, "post" )
+                    if go_tweet is not None:
+                        tweeter_client.create_tweet(text=twtext)
+                        site_hist.put_site( site_link, site_text, embedding, "post" )
                     if post_lang == LANG_JP:
                         output_jp += 1
                     else:
@@ -627,7 +516,23 @@ def ChatCompletion( mesg_list, temperature=0 ):
 
     return content
 
+def to_embedding( input ):
+    res = openai.Embedding.create(input=input, model="text-embedding-ada-002")
+    return [data.get('embedding',None) for data in res.get('data',[])]
 
+def fsplit_contents( text_all, split_size=2000, oerlap=200 ):
+    tk_all = tk_encoder.encode(text_all)
+    size_all =  len(tk_all)
+    p = 0
+    step = 2000
+    overlap = 200
+    results = []
+    while p<size_all:
+        info_list = tk_all[p:p+step]
+        contents = tk_encoder.decode(info_list)
+        results.append( (len(info_list),contents) )
+        p = p + step - overlap
+    return results
 
 # DALL-Eによる画像生成
 def generate_image(prompt):
