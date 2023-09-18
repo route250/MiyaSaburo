@@ -50,6 +50,15 @@ from libs.CustomChatMessageHistory import CustomChatMessageHistory
 # 再生関係
 import pygame
 import wave
+from libs.utils import Utils
+
+if __name__ == "__main__":
+    pre = os.getenv('OPENAI_API_KEY')
+    Utils.load_env( ".miyasaburo.conf" )
+    after = os.getenv('OPENAI_API_KEY')
+    if after is not None and pre != after:
+        print("UPDATE OPENAI_API_KEY")
+        openai.api_key=after
 
 class ModuleState:
     def __init__(self,title):
