@@ -413,6 +413,7 @@ def recoard_audio():
                     audio = pyaudio.PyAudio()
                     stream = audio.open(input_device_index=Model.microphone_index,format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=REC_SIZE)
                     Model.audio_state.set_running(True)
+                    Model.audio_state.set_error(False)
                     while running and Model.audio_state.get_enable():
                         frames = stream.read(REC_SIZE)
                         frame_queue.put((Model.play_talk_id,frames))
@@ -420,10 +421,19 @@ def recoard_audio():
                     Model.audio_state.set_error(True)
                     traceback.print_exc()
                 finally:
-                    if stream.is_active:
-                        stream.stop_stream()
-                    stream.close()
-                    audio.terminate()
+                    try:
+                        if stream.is_active:
+                            stream.stop_stream()
+                    except:
+                        pass
+                    try:
+                        stream.close()
+                    except:
+                        pass
+                    try:
+                        audio.terminate()
+                    except:
+                        pass
                     Model.audio_state.set_running(False)
             else:
                 time.sleep(0.5)
