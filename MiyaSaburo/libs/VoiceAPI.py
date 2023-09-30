@@ -1,4 +1,5 @@
 
+import os
 import requests
 import json
 import time
@@ -34,17 +35,21 @@ class VoiceAPI:
         self.speaker = -1
 
     def _post_audio_query(self, text: str) -> dict:
+        sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
+        sv_port: str = os.getenv('VOICEVOX_PORT','50021')
         params = {'text': text, 'speaker': self.speaker}
-        res : requests.Response = requests.post('http://localhost:50021/audio_query', params=params)
+        res : requests.Response = requests.post(f'http://{sv_host}:{sv_port}/audio_query', params=params)
         res.content
         return res.json()
 
     def _post_synthesis(self, audio_query_response: dict) -> bytes:
+        sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
+        sv_port: str = os.getenv('VOICEVOX_PORT','50021')
         params = {'speaker': self.speaker}
         headers = {'content-type': 'application/json'}
         audio_query_response_json = json.dumps(audio_query_response)
         res = requests.post(
-            'http://localhost:50021/synthesis',
+            f'http://{sv_host}:{sv_port}/synthesis',
             data=audio_query_response_json,
             params=params,
             headers=headers
@@ -52,14 +57,15 @@ class VoiceAPI:
         return res.content
 
     def _post_audio_query_b(self, text: str) -> bytes:
-
+        sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
+        sv_port: str = os.getenv('VOICEVOX_PORT','50021')
         params = {'text': text, 'speaker': self.speaker}
-        res1 : requests.Response = requests.post('http://localhost:50021/audio_query', params=params)
+        res1 : requests.Response = requests.post( f'http://{sv_host}:{sv_port}/audio_query', params=params)
 
         params = {'speaker': self.speaker}
         headers = {'content-type': 'application/json'}
         res = requests.post(
-            'http://localhost:50021/synthesis',
+            f'http://{sv_host}:{sv_port}/synthesis',
             data=res1.content,
             params=params,
             headers=headers
