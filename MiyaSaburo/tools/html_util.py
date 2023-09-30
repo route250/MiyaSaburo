@@ -58,13 +58,13 @@ class HtmlUtil:
 
     @staticmethod
     def trim_article_tag( doc: HtmlElement ) -> None:
-        article_tags = doc.xpath("//article")
+        article_tags = doc.xpath("//article") if doc is not None else None
         if article_tags is not None and len(article_tags)>0:
             HtmlUtil.trim_parent_tag( article_tags )
 
     @staticmethod
     def trim_h1_tag( doc: HtmlElement ) -> None:
-        h1_list = doc.xpath("//h1")
+        h1_list = doc.xpath("//h1") if doc is not None else None
         if h1_list is None or len(h1_list)==1:
             ht_tag = HtmlUtil.pop_tag( h1_list[0] )
             while ht_tag is not None:

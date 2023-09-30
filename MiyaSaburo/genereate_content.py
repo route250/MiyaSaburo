@@ -2,6 +2,8 @@ import sys,os,re,time,json
 import traceback
 import openai, tiktoken
 from openai.embeddings_utils import cosine_similarity
+import tiktoken
+from tiktoken.core import Encoding
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
@@ -65,7 +67,7 @@ def neko_news():
     query_en = f"Funny Cat News stories -site:www.youtube.com after:{dates}"
 
     go_tweet = True
-    # トレンドキーワードを収集する
+    print("トレンドキーワードを収集する")
     trand_link:str = "https://search.yahoo.co.jp/realtime"
     sub_query = []
     try:
@@ -76,30 +78,64 @@ def neko_news():
     except:
         pass
 
-    query_jp_list = [ f"\"{x}\" \"猫\" -site:www.youtube.com" for x in sub_query ]
-    query_jp_list += [ query_jp ]
-    query_en_list = [ f"\"{x}\" Funny Cat News stories -site:www.youtube.com" for x in sub_query ]
-    query_en_list += [ query_en ]
+    print( f"トレンドキーワードを翻訳する")
+
+    trans = "以下の単語を翻訳して"
+    trans += "\n|単語|日本語|英語|"
+    trans += "\n|---|---|---|"
+    for w in sub_query:
+        trans += f"\n|{w}|||"
+
+    translate_result: str = Completion(trans, max_tokens=2000)
+    if translate_result is None or len(translate_result)<20:
+        print( f"ERROR: 評価結果が想定外\n{translate_result}")
+        return
+    else:
+        translate_result = translate_result.replace('\n\n','\n')
+        print(translate_result)
+        print("--------")
+        # 文字列を行に分割し、不要な行を取り除く
+        lines = translate_result.strip().split("\n")
+        # 各行をパースしてデータを取得
+        data = [tuple(line.strip("|").split("|")) for line in lines]
+        # データを辞書形式に変換
+        buzz_list = [{"buzz_jp": jp, "buzz_en": en} for word,jp, en in data if not "日本語"==jp and not "---"==jp ]
+        for p in buzz_list:
+            print(p)
+        print("----")
+
+    main_list_jp = [ "猫 ニュース おもしろ", "猫 ニュース ほっこり", "猫 ニュース 可愛い" ]
+    main_list_en = [ "Funny cat stories", "cute cat stories"]
+
+    query_jp_list = [ (f"\"{bz['buzz_jp']}\" \"猫\" -site:www.youtube.com", { "num": 10, "qdr": "3y", "gl": "jp", "hl": "ja", "buzz_jp": bz['buzz_jp'], "buzz_en": bz['buzz_en'] }) for bz in buzz_list ]
+    query_jp_list += [ (f"{q} -site:www.youtube.com after:{dates}", { "num": 20, "qdr": "3m", "gl": "jp", "hl": "ja", "q_jp": q }) for q in main_list_jp ]
+
+    #query_en_list =[] # [ (f"\"{x}\" Funny Cat News stories -site:www.youtube.com",None) for x in sub_query ]
+    #query_en_list += [ (query_en,{ "num": 20, "qdr": "3y", "gl": "uk", "hl": "en"}) ]
+
+    query_en_list = [ (f"\"{bz['buzz_en']}\" Funny Cat News stories -site:www.youtube.com", { "num": 10, "qdr": "3y", "gl": "uk", "hl": "en", "buzz_jp": bz['buzz_jp'], "buzz_en": bz['buzz_en'] }) for bz in buzz_list ]
+    query_en_list += [ (f"{q} -site:www.youtube.com after:{dates}", { "num": 20, "qdr": "3m", "gl": "uk", "hl": "en", "q_en": q }) for q in main_list_en ]
 
     detect_fmt = "下記の記事内容について\n\n記事タイトル:{}\n記事内容:\n{}\n\n"
     detect_fmt = f"{detect_fmt}下記の項目に答えて下さい。\n"
-    detect_fmt = f"{detect_fmt}1)この記事に含まれる国名・地名をリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}2)地名は日本国内のものですか？\n"
-    detect_fmt = f"{detect_fmt}3)この記事に日本語の「海外」という単語は含まれていますか？\n"
-    detect_fmt = f"{detect_fmt}4)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}5)人物名、名前は日本人っぽいですか？\n"
-    detect_fmt = f"{detect_fmt}6)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的、性差別的、暴力的な思想や思想誘導が含まれていればリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}10)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}1)この記事に含まれる記事、アーティクル、話題のタイトルをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}2)この記事に含まれる国名・地名をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}3)地名は日本国内のものですか？\n"
+    detect_fmt = f"{detect_fmt}4)この記事に日本語の「海外」という単語は含まれていますか？\n"
+    detect_fmt = f"{detect_fmt}5)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}6)人物名、名前は日本人っぽいですか？\n"
+    detect_fmt = f"{detect_fmt}7)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}8)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}9)この記事から政治的、宗教的、反社会的、性差別的、暴力的な思想や思想誘導が含まれていればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}10)この記事から得られる教訓や示唆があればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}11)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}\n\n上記の情報より下記の質問に回答して下さい\n"
-    detect_fmt = f"{detect_fmt}11)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
-    detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
-    detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
-    detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的、性的、暴力的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
-    detect_fmt = f"{detect_fmt}15)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
-    detect_fmt = f"{detect_fmt}16)記事に複数の記事が含まれますか？(Multi or Singleで回答すること)\n"
+    detect_fmt = f"{detect_fmt}12)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
+    detect_fmt = f"{detect_fmt}13)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
+    detect_fmt = f"{detect_fmt}14)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
+    detect_fmt = f"{detect_fmt}15)政治的、宗教的、反社会的、性的、暴力的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
+    detect_fmt = f"{detect_fmt}16)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
+    detect_fmt = f"{detect_fmt}17)記事に複数の記事、アーティクル、話題が含まれますか？(Multi or Singleで回答すること)\n"
 
     article_fmt = "下記の記事をフォロワーに紹介するツイートを生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
     prompt_fmt1 = "\n".join( [
@@ -182,21 +218,41 @@ def neko_news():
 
     exclude_site = {
         "www.youtube.com": 1,
-        "cat.blogmura.com": 1,
-        "www.thoroughbreddailynews.com": 1,
+        "www.amazon.co.jp": 1, "www.amazon.com": 1,
+        "m.facebook.com": 1,
         "www.tbs.co.jp": 1,
         "www.oricon.co.jp": 1,
+        "www.pixiv.net": 1,
+        "www.buzzfeed.com": 1,
+        "piapro.jp": 1,         "blog.piapro.jp": 1, "jp.mercari.com": 1,
+        "search.rakuten.co.jp": 1,
+        "docs.google.com": 1,
+        "www.thoroughbreddailynews.com": 1, "www.jrha.or.jp": 1, #馬専門サイト
+        "togetter.com": 1, "twilog.togetter.com": 1,
+       # "cat.blogmura.com": 1,
     }
+    exclude_host = [
+        r"[^a-z]youtube\.", r"[^a-z]amazon\.", r"[^a-z]facebook\.", 
+        r"[^a-z]rakuten\.",r"[^a-z]mercari\.",r"[^a-z]google\.",
+        r"[^a-z]tbs\.",        r"[^a-z]jrha\.",
+        r"[^a-z]oricon\.",r"[^a-z]pixiv\.",r"[^a-z]buzzfeed\.",r"[^a-z]piapro\.",r"[^a-z]togetter\.",
+        r"[^a-z]pinterest\.",
+    ]
 
     must_keywords = [
         "猫", "ねこ", "ネコ",
         "cat", "Cat",
     ]
     exclude_keywords = [
-        "記事が見つかりません","公開期間が終了", "ページが見つかりません"
-        "販売", "価格", "値段", "譲渡会", "殺処分", 
+        "記事が見つかりません","記事は見つかりません","公開期間が終了","公開期間を終了","公開期間は終了", "ページが見つかりません", "ページは見つかりません", "まとめ", "Page Not Found", "page not found", "Page not found",
+        "販売", "価格", "値段", "譲渡会", "殺処分", "購入", "プロモーション", "%オフ", "％オフ", "%Off", "%OFF", "％OFF", "セール", "里親募集",
+        "商品の説明", "商品の状態", "購入手続き", 
         "TBS","MBS","出演","テレビ局", "配信","放送",
+        "ゲーム", "入荷",
         "ディズニー", "disney", "Disney",
+        "韓国","Stray Kids","ストレイキッズ","アルバム", "ビジュアル",
+        "Linux", "linux", "python", "Python",
+        "ポケモン", "ピカチュウ", "pokemon", "Pokemon", "Pikachu", "Pikachu",
         ]
 
     hashtag_list_jp = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#CatsOnTwitter", "#funnyanimals"]
@@ -206,34 +262,53 @@ def neko_news():
     # ツイート履歴管理
 
     # 類似記事除外リミット
-    sim_limit =0.95
+    sim_limit =0.98
 
     tw_count_max = 1
     output_jp = 0
     output_en = 0
 
-    Ite = module.inerator2( query_jp_list, query_en_list )
+    Ite = module.inerator2( query_jp_list, query_en_list, num_result=50, qdr=None, hl=None )
     for d in Ite:
         if output_jp>=tw_count_max and output_en>=tw_count_max:
             break
         site_title = d.get('title',"")
         site_link = d.get('link',"")
-        site_hostname = urlparse(site_link).netloc
+        site_prop = d.get('prop',{})
+        site_url = urlparse(site_link)
+        site_hostname = site_url.netloc
 
         print("----記事判定---------------------------------------------------")
         print( f"記事タイトル:{site_title}")
         print( f"記事URL:{site_link}")
+        print( f"prop:{site_prop}")
         if site_title.find("ノミ")>0:
             continue
         #---------------------------
         # サイト判定
         #---------------------------
+        # トップページ
+        if len(site_url.path)<2:
+            print( f"SKIP:Top page {site_link}")
+            continue
+        # 除外ホスト
+        if site_hostname.find("pinterest")>0:
+            pass
+        a = [ r for r in exclude_host if re.search( r, site_hostname ) ]
+        if len(a)>0:
+            print( f"SKIP: 除外ホストが含まれる: {a}")
+            continue
+        # 除外キーワード判定
+        a=[ keyword for keyword in exclude_keywords if site_title.find(keyword)>=0]
+        if len(a)>0:
+            print( f"SKIP: 除外キーワードが含まれる: {a}")
+            continue
         # 除外サイト
-        if exclude_site.get( site_hostname, None ) is not None:
-            print( f"Exclude {site_link}")
+        if exclude_site.get( site_hostname, None ) is not None or "manga" in site_link:
+            print( f"SKIP:Exclude {site_link}")
             continue
         # 既に使ったサイト
-        site_lastdt = site_hist.is_used( site_link, 2 )
+        site_lastdt = site_hist.is_used( site_link, 1 )
         if site_lastdt is not None:
             print( f"SKIP: used site in {site_lastdt} {site_link}")
             continue
@@ -245,6 +320,9 @@ def neko_news():
         site_text: str = module.get_content( site_link, type="title", timeout=15 )
         if site_text is None or site_text == '':
             print( f"ERROR: 本文の取得に失敗")
+            continue
+        if len(site_text)<100:
+            print( f"ERROR: 本文が100文字以下")
             continue
         # 単純な言語判定
         if output_jp>=tw_count_max and not Utils.contains_kana(site_text):
@@ -271,15 +349,22 @@ def neko_news():
         #---------------------------
         print( f"記事の内容評価....")
         # LLMで内容を評価する
-        detect_hist = []
-        detect_hist += [ {"role": "user", "content": detect_fmt.format( site_title, site_text[:2000] ) } ]
-        detect_result: str = ChatCompletion(detect_hist)
-        if detect_result is None or len(detect_result)<20:
-            print( f"ERROR: 評価結果が想定外\n{detect_result}")
+        detect_prompt = detect_fmt.format( site_title, site_text[:2000] )
+        detect_count = 0
+        post_lang = -1
+        while post_lang<0 and detect_count<3:
+            detect_count += 1
+            detect_result: str = Completion(detect_prompt,max_tokens=None)
+            if detect_result is None or len(detect_result)<20:
+                print( f"ERROR: 評価結果が想定外\n{detect_result}")
+                break
+            detect_result = detect_result.replace('\n\n','\n')
+            print(detect_result)
+            print("--------")
+            post_lang = find_keyword(detect_result, "InsideJapan", "OutsideJapan")
+        if post_lang<0:
+            print( f"Error: 評価エラー: {site_title}\n {site_link}\n" )
             continue
-        detect_result = detect_result.replace('\n\n','\n')
-        print(detect_result)
-        print("--------")
         #---------------------------
         # 判定
         #---------------------------
@@ -343,6 +428,15 @@ def neko_news():
         print("----ツイート生成---------------------------------------------------")
         print( f"記事タイトル:{site_title}")
         print( f"記事URL:{site_link}")
+        user_input = None
+        while user_input is None or (user_input != 'y' and user_input != 'n' ):
+            user_input = input('y or n or p >> ')
+            if user_input == 'p':
+                print(site_text[:2000])
+        if user_input!='y':
+            print( f"SKIP: ユーザ判断によるスキップ" )
+            continue
+
         msg_hist = []
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
         msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_ln, chars_limit) } ]
@@ -474,6 +568,98 @@ def trim_post( content: str ) -> str:
     content = content.strip()
     return content
 
+# <OpenAIObject text_completion id=cmpl-849BdGArSBdktULuIy0X7FARtVKUS at 0x7f80e153ecf0> JSON: {
+#   "id": "cmpl-849BdGArSBdktULuIy0X7FARtVKUS",
+#   "object": "text_completion",
+#   "created": 1695999317,
+#   "model": "gpt-3.5-turbo-instruct",
+#   "choices": [
+#     {
+#       "text": "\n\n|\u65e5\u672c\u8a9e|\u82f1\u8a9e|\n|---|---|\n|Outrageous|\u3068\u3093\u3067\u3082\u306a\u3044|\n|\u30d5\u30ea\u30fc\u30ec\u30f3|\u30d5\u30ea\u30fc\u30ec\u30f3|\n|\u30af\u30f4\u30a1\u30fc\u30eb|\u30af\u30a9\u30fc\u30af|\n|\u30cf\u30a4\u30bf\u30fc|\u30cf\u30a4\u30bf\u30fc|\n|ichiban|\u4e00\u756a|",
+#       "index": 0,
+#       "logprobs": null,
+#       "finish_reason": "stop"
+#     }
+#   ],
+#   "usage": {
+#     "prompt_tokens": 60,
+#     "completion_tokens": 74,
+#     "total_tokens": 134
+#   }
+prompt_tokens: int = 0
+completion_tokens: int = 0
+total_tokens:int  = 0
+def token_usage( response ):
+    global prompt_tokens, completion_tokens, total_tokens
+    try:
+        usage = response.usage
+        p = usage.prompt_tokens
+        c = usage.completion_tokens
+        t = usage.total_tokens
+        prompt_tokens += p
+        completion_tokens += c
+        total_tokens += t
+        in_doll = int((prompt_tokens+999)/1000) * 0.0015
+        out_doll = int((completion_tokens+999)/1000) * 0.002
+        total_doll = in_doll + out_doll
+        print( f"${total_doll} prompt:{p}/{prompt_tokens} ${in_doll} completion:{c}/{completion_tokens} ${out_doll} total:{t}/{total_tokens}")
+        return True
+    except Exception as ex:
+        return False
+
+def Completion( prompt, *, max_tokens=None, temperature=0 ):
+    try:
+
+        #print( f"openai.api_key={openai.api_key}")
+        #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
+        if openai.api_key is None:
+            openai.api_key=os.getenv('OPENAI_API_KEY')
+        in_count = token_count( prompt )
+        if max_tokens is None:
+            max_tokens = 4096
+        u = max_tokens - in_count - 50
+        for retry in range(2,-1,-1):
+            try:
+                response = openai.Completion.create(
+                        model="gpt-3.5-turbo-instruct",
+                        temperature = temperature, max_tokens=u,
+                        prompt=prompt,
+                        request_timeout=15
+                    )
+                break
+            except openai.error.Timeout as ex:
+                if retry>0:
+                    print( f"{ex}" )
+                    time.sleep(5)
+                else:
+                    raise ex
+            except openai.error.ServiceUnavailableError as ex:
+                if retry>0:
+                    print( f"{ex}" )
+                    time.sleep(5)
+                else:
+                    raise ex
+
+        token_usage( response )           
+        if response is None or response.choices is None or len(response.choices)==0:
+            print( f"Error:invalid response from openai\n{response}")
+            return None
+        content = response.choices[0].text.strip()
+    except openai.error.AuthenticationError as ex:
+        print( f"{ex}" )
+        return None
+    except openai.error.InvalidRequestError as ex:
+        print( f"{ex}" )
+        return None
+    except openai.error.ServiceUnavailableError as ex:
+        print( f"{ex}" )
+        return None
+    except Exception as ex:
+        traceback.print_exc()
+        return None
+
+    return content
+
 def ChatCompletion( mesg_list, temperature=0 ):
     try:
 
@@ -495,7 +681,7 @@ def ChatCompletion( mesg_list, temperature=0 ):
                     time.sleep(5)
                 else:
                     raise ex
-            
+        token_usage( response )
         if response is None or response.choices is None or len(response.choices)==0:
             print( f"Error:invalid response from openai\n{response}")
             return None
@@ -519,6 +705,12 @@ def ChatCompletion( mesg_list, temperature=0 ):
 def to_embedding( input ):
     res = openai.Embedding.create(input=input, model="text-embedding-ada-002")
     return [data.get('embedding',None) for data in res.get('data',[])]
+
+def token_count( input: str ) -> int:
+    encoding: Encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    tokens = encoding.encode(input)
+    count = len(tokens)
+    return count
 
 def fsplit_contents( text_all, split_size=2000, oerlap=200 ):
     tk_all = tk_encoder.encode(text_all)

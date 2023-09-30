@@ -2,6 +2,7 @@
 import os
 import sys
 import re
+import json
 import traceback,logging
 import requests
 import lxml.html as html
@@ -43,6 +44,25 @@ class WebSearchModule:
         "https://s.n-kishou.co.jp/w/charge/","https://weather.yahoo.co.jp/",
         "https://twitter.com","https://www.instagram.com","https://www.facebook.com"
     )
+    GOOGLE_EXCLUDE_SITE = [
+        "-site:youtube.com",
+        "-site:amazon.co.jp", "-site:amazon.com",
+        "-site:facebook.com",
+        "-site:instagram.com", "-site:twitter.com",
+        "-site:google.com",
+        "-site:twicomi.com",
+        "-site:mercari.com", "-site:rakuten.co.jp", 
+        "-site:tbs.co.jp", "-site:nhk.or.jp",
+        "-site:oricon.co.jp", 
+        "-site:pixiv.net",
+        "-site:buzzfeed.com",
+        "-site:piapro.jp",
+        "-site:thoroughbreddailynews.com",
+        "-site:www.jrha.or.jp", #馬専門サイト
+        "-site:togetter.com",
+        '-"記事一覧"', '-"記事 まとめ"', '-"最新情報"', '-"レスリリース一覧"', '-"検索結果"'
+       # "cat.blogmura.com": 1,
+       ]
     DEFAULT_NUM_RESULT: int = 4
 
     def __init__(self):
@@ -82,10 +102,11 @@ class WebSearchModule:
             logger.exception("")
         return txt
 
-    def search_snippet(self, query: str, *,num_result=None,qdr=None) -> str:
+    def search_snippet(self, query: str, *,num_result=None,qdr=None,hl:str=None) -> str:
         """Run query through GoogleSearch and parse result."""
         snippets = []
-        results = self.search_meta(query, num_result=num_result,qdr=qdr)
+        # results = self.search_meta(query, num_result=num_result,qdr=qdr,hl=hl)
+        results = self.google_custom_search(query, num_result=num_result,qdr=qdr,hl=hl)
         if len(results) == 0:
             return "No good Google Search Result was found"
         for result in results:
@@ -129,7 +150,7 @@ class WebSearchModule:
             logger.exception("")
         return ""
 
-    def search_meta(self,aQuery, *, num_result: int=None, qdr: str = "m1", user_agent = None, timeout = None) -> list[dict]:
+    def search_meta(self,aQuery, *, num_result: int=None, qdr: str = "m1", gl: str = None, hl: str = None, user_agent = None, timeout = None) -> list[dict]:
         
         # qdrは期間指定 1ヶ月 m1 48時間 h48
 
@@ -141,13 +162,23 @@ class WebSearchModule:
 
         zEncQuery = WebSearchModule.urlEncode(aQuery)
         #zURL = mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&gl=us&hl=en"
-        zURL = WebSearchModule.mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8&hl=en"
-        if qdr:
+        zURL = WebSearchModule.mBaseURL + "?q=" + zEncQuery + "&ie=UTF-8"
+        # gws_rdはリダイレクト　gws_rd=crでリダイレクト無効
+        zURL += "&gws_rd=cr"
+        # pwsはプライベート検索 pws=0でプライベート検索無効
+        zURL += "&pws=0"
+        # glは国を指定
+        if gl is not None and len(gl)>0:
+            zURL += f"&gl={gl}"
+        # hlは言語を指定
+        if hl is not None and len(hl)>0:
+            zURL += f"&hl={hl}"
+        if qdr is not None and len(qdr)>0:
             zURL += f"&tbs=qdr:{qdr}"
 
         try:
             # requestsを使用してWebページを取得
-            response = requests.get(zURL, timeout=timeout, headers={"User-Agent": user_agent})
+            response = requests.get(zURL, timeout=timeout, headers={"User-Agent": user_agent}, verify=True)
             os.makedirs("logs", exist_ok=True)
             with open("logs/search.html","wb") as f:
                 f.write(response.content)
@@ -205,6 +236,100 @@ class WebSearchModule:
 
         return metadata_result
     
+    def google_custom_search (self,aQuery, *, num_result: int=None, qdr: str = "m1", gl: str = None, hl: str = None, timeout = None, cse_id=None, api_key=None) -> list[dict]:
+        
+        if api_key is None:
+            api_key = os.getenv('GOOGLE_API_KEY')
+        if cse_id is None:
+            cse_id = os.getenv('GOOGLE_CSE_ID')
+        url = "https://www.googleapis.com/customsearch/v1"
+
+        # qdrは期間指定 1ヶ月 m1 48時間 h48
+
+        num_result = num_result if num_result else WebSearchModule.DEFAULT_NUM_RESULT
+        metadata_result = []
+
+        if api_key is None or cse_id is None:
+            return metadata_result
+
+        timeout = timeout if timeout else self.mTimeout
+
+        Q = aQuery + " " + ( " ".join( WebSearchModule.GOOGLE_EXCLUDE_SITE ))
+        params = {
+            'key': api_key,
+            'cx': cse_id,
+            'q': Q,
+            'c2coff': 1,
+            'safe': 'active',
+            'fileType': 'html',
+        }
+
+        # glは国を指定
+        if gl is not None and len(gl)>0:
+            params["gl"] = gl
+        # hlは言語を指定
+        if hl is not None and len(hl)>0:
+            params["hl"] = hl
+            params["lr"] = f"lang_h{hl}"
+        if qdr is not None and len(qdr)>0:
+            params["dateRestrict"] = qdr
+   
+        start_num = 1
+        try:
+            while start_num>0 and len(metadata_result)<num_result:
+                params['start'] = start_num
+                response = requests.get(url, params=params)
+                if response.status_code != 200:
+                    logger.error(f"エラー： {response.status_code} {response.text}.")
+                    break
+                os.makedirs("logs", exist_ok=True)
+                j = None
+                try:
+                    j = json.loads(response.text)
+                    with open("logs/search.json","w") as f:
+                        json.dump( j, f, indent=2, ensure_ascii=False )
+                except Exception as ex:
+                    with open("logs/search.json","wb") as f:
+                        f.write(response.text)
+                    raise ex
+                for item in j.get("items",{}):
+                    zLink = item.get("link","")
+                    if len(zLink)<3:
+                        continue
+                    zTitle = item.get("title",None)
+                    zSnippet = item.get("snippet",None)
+                    zResult = {}
+                    zResult["link"] = zLink
+                    if zSnippet is None:
+                        if zTitle is None:
+                            pass
+                        else:
+                            zSnippet = zTitle
+                    else:
+                        if zTitle is None:
+                            zTitle = zSnippet
+                        else:
+                            pass
+                    zResult["snippet"] = zSnippet
+                    zResult["title"] = zTitle
+                    metadata_result.append(zResult)
+                    if len(metadata_result)>=num_result:
+                        break
+                
+                np = j.get("queries",{}).get("nextPage",[])
+                start_num = np[0].get("startIndex",-1) if len(np)>0 else -1
+        #   "searchInformation": {
+        #     "searchTime": 0.49328,
+        #     "formattedSearchTime": "0.49",
+        #     "totalResults": "13500000",
+        #     "formattedTotalResults": "13,500,000"
+        #   },
+        except Exception as ex:
+            logger.exception("")
+
+        return metadata_result
+    
+
     XPATH_HTAG=".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"
     RE_H_MATCH = re.compile('^h[1-6]$')
 
@@ -531,16 +656,18 @@ class WebSearchModule:
     # -----------------------------------------------------------------
     # イテレーター
     # -----------------------------------------------------------------
-    def inerator( self, query_list: list[str], num_result = 10 ):
-        Ite: WebSearchModule.ResultIterator = self.ResultIterator(query_list,num_result=num_result )
+    def inerator( self, query_list: list[str], *, num_result = 10, qdr=None, hl=None ):
+        Ite: WebSearchModule.ResultIterator = self.ResultIterator(query_list,num_result=num_result, qdr=qdr, hl=hl )
         return Ite
 
     class ResultIterator(object):
 
-        def __init__(self, query_list: list[str], num_result = 10, qdr=None ):
+        def __init__(self, query_list: list[str], num_result = 10, qdr=None, gl=None, hl=None ):
             self.module : WebSearchModule = WebSearchModule()
             self.num_result = num_result
             self.qdr = qdr
+            self.gl = gl
+            self.hl = hl
             self.res_list = []
             self.res_index = 0
             self.query_list = query_list
@@ -561,10 +688,10 @@ class WebSearchModule:
             while ret is None:
                 while self.res_index>=len(self.res_list):
                     if self.query_index<len(self.query_list):
-                        query = self.query_list[self.query_index]
+                        query,prop = self.query_list[self.query_index]
                         self.query_index += 1
                         self.res_index = 0
-                        self.res_list = self.search_meta( query )
+                        self.res_list = self.search_meta( query,prop )
                     else:
                         return None
                 ret = self.res_list[self.res_index]
@@ -578,20 +705,34 @@ class WebSearchModule:
                     ret = None
             return ret
 
-        def search_meta( self, query: str ):
+        def search_meta( self, query: str, prop: dict=None ):
             print( f"[検索中] {query}" )
             results = None
             try:
-                results = self.module.search_meta( query, num_result = self.num_result, qdr=self.qdr )
+                if isinstance(prop,dict):
+                    xnum = prop.get("num",self.num_result)
+                    xqdr = prop.get("qdr",self.qdr)
+                    xgl = prop.get("gl",self.gl)
+                    xhl = prop.get("hl",self.hl)
+                else:
+                    xnum = self.num_result
+                    xqdr = self.qdr
+                    gl = self.gl
+                    hl = self.hl                    
+                # results = self.module.search_meta( query, num_result = xnum, qdr=xqdr, gl=xgl, hl=xhl )
+                results = self.module.google_custom_search( query, num_result = xnum, qdr=xqdr, gl=xgl, hl=xhl )
+                if prop is not None:
+                    for r in results:
+                        r['prop'] = prop
             except Exception as ex:
                 print(ex)
             if results is None:
                 results = []
             return results
 
-    def inerator2( self, q1: list[str], q2: list[str], num_result = 10, qdr=None ):
-        Ite1: WebSearchModule.ResultIterator = self.ResultIterator(q1,num_result=num_result, qdr=qdr )
-        Ite2: WebSearchModule.ResultIterator = self.ResultIterator(q2,num_result=num_result, qdr=qdr )
+    def inerator2( self, q1: list[str], q2: list[str], num_result = 10, qdr=None, gl=None, hl=None ):
+        Ite1: WebSearchModule.ResultIterator = self.ResultIterator(q1,num_result=num_result, qdr=qdr, gl=gl, hl=hl )
+        Ite2: WebSearchModule.ResultIterator = self.ResultIterator(q2,num_result=num_result, qdr=qdr, gl=gl, hl=hl )
         return WebSearchModule.MultiIterator( [ Ite1, Ite2 ] )
 
     class MultiIterator(object):
@@ -927,8 +1068,8 @@ class WebSearchToolJ(BaseTool):
         self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None
     ) -> str:
         """Use the tool."""
-        return self.module.search_meta(query)
-
+        # return self.module.search_meta(query)
+        return self.module.google_custom_search(query)
     async def _arun(
         self, query: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None
     ) -> str:
@@ -937,7 +1078,8 @@ class WebSearchToolJ(BaseTool):
     
 def test():
     module : WebSearchModule = WebSearchModule()
-    list = module.search_meta( "迷い猫")
+    # list = module.search_meta( "迷い猫")
+    list = module.google_custom_search( "迷い猫")
     for d in list:
         print("-----")
         print( f"{d['title']} {d['link']}")
@@ -992,7 +1134,12 @@ def main2(argv):
     # return 0
     #ret = module.search_snippet('最新ニュース')
     print( ret )
+def test_cse():
+    module = WebSearchModule()
+    ret = module.google_custom_search( "猫" )
+    print( ret )
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv))
+    test_cse()
+    #sys.exit(main(sys.argv))
 
