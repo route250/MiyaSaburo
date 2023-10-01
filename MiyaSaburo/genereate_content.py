@@ -624,7 +624,7 @@ def Completion( prompt, *, max_tokens=None, temperature=0 ):
                         model="gpt-3.5-turbo-instruct",
                         temperature = temperature, max_tokens=u,
                         prompt=prompt,
-                        request_timeout=15
+                        request_timeout=(5,25)
                     )
                 break
             except openai.error.Timeout as ex:
@@ -672,7 +672,8 @@ def ChatCompletion( mesg_list, temperature=0 ):
                 response = openai.ChatCompletion.create(
                         model="gpt-3.5-turbo",
                         temperature = temperature,
-                        messages=mesg_list
+                        messages=mesg_list,
+                        request_timeout=(5,25)
                     )
                 break
             except openai.error.ServiceUnavailableError as ex:
