@@ -124,17 +124,17 @@ def neko_news():
     detect_fmt = f"{detect_fmt}4)この記事に日本語の「海外」という単語は含まれていますか？\n"
     detect_fmt = f"{detect_fmt}5)この記事に含まれる人物名、ねこの名前をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}6)人物名、名前は日本人っぽいですか？\n"
-    detect_fmt = f"{detect_fmt}7)この記事に含まれる物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}8)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}9)この記事から政治的、宗教的、反社会的、性差別的、暴力的な思想や思想誘導が含まれていればリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}10)この記事から得られる教訓や示唆があればリストアップして下さい\n"
-    detect_fmt = f"{detect_fmt}11)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}7)この記事に含まれるイベント、催し、公演等があればタイトルと日時をリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}8)この記事から政治的、宗教的、反社会的、性差別的、暴力的な思想や思想誘導が含まれていればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}9)この記事から得られる教訓や示唆があればリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}10)この記事の出来事についてニュースとなった特徴をリストアップして下さい\n"
     detect_fmt = f"{detect_fmt}\n\n上記の情報より下記の質問に回答して下さい\n"
-    detect_fmt = f"{detect_fmt}12)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
-    detect_fmt = f"{detect_fmt}13)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
-    detect_fmt = f"{detect_fmt}14)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
-    detect_fmt = f"{detect_fmt}15)政治的、宗教的、反社会的、性的、暴力的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
-    detect_fmt = f"{detect_fmt}16)物語、書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどのメディア記事ですか？(Media or NotMediaで回答すること)\n"
+    detect_fmt = f"{detect_fmt}11)この記事は日本国内の出来事ですか？海外での出来事ですか？(InsideJapan or OutsideJapanで回答すること)\n"
+    detect_fmt = f"{detect_fmt}12)猫に関する記事ですか？(Cat or NotCatで回答すること)\n"
+    detect_fmt = f"{detect_fmt}13)動物や生体の販売、広告ですか？(Sale or NotSaleで回答すること)\n"
+    detect_fmt = f"{detect_fmt}14)政治的、宗教的、反社会的、性的、暴力的が含まれていますか？(Asocial or NotAsocialで回答すること)\n"
+    detect_fmt = f"{detect_fmt}15)この記事に含まれる書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメーションをリストアップして下さい\n"
+    detect_fmt = f"{detect_fmt}16)書籍、小説、ドラマ、映画、番組、演劇、公演、漫画、アニメなどの話題が含まれますか？(Media or NotMediaで回答すること)\n"
     detect_fmt = f"{detect_fmt}17)記事に複数の記事、アーティクル、話題が含まれますか？(Multi or Singleで回答すること)\n"
 
     article_fmt = "下記の記事をフォロワーに紹介するツイートを生成して下さい。\n記事タイトル:{}\n記事内容:\n{}"
@@ -219,7 +219,7 @@ def neko_news():
     exclude_site = {
         "www.youtube.com": 1,
         "www.amazon.co.jp": 1, "www.amazon.com": 1,
-        "m.facebook.com": 1,
+        "m.facebook.com": 1, "www.tiktok.com": 1,
         "www.tbs.co.jp": 1,
         "www.oricon.co.jp": 1,
         "www.pixiv.net": 1,
@@ -232,9 +232,9 @@ def neko_news():
        # "cat.blogmura.com": 1,
     }
     exclude_host = [
-        r"[^a-z]youtube\.", r"[^a-z]amazon\.", r"[^a-z]facebook\.", 
+        r"[^a-z]youtube\.", r"[^a-z]amazon\.", r"[^a-z]facebook\.", "[^a-z]tiktok\.",
         r"[^a-z]rakuten\.",r"[^a-z]mercari\.",r"[^a-z]google\.",
-        r"[^a-z]tbs\.",        r"[^a-z]jrha\.",
+        r"[^a-z]tbs\.", r"[^a-z]abema\.",  r"[^a-z]jrha\.",
         r"[^a-z]oricon\.",r"[^a-z]pixiv\.",r"[^a-z]buzzfeed\.",r"[^a-z]piapro\.",r"[^a-z]togetter\.",
         r"[^a-z]pinterest\.",
     ]
@@ -243,6 +243,8 @@ def neko_news():
         "猫", "ねこ", "ネコ",
         "cat", "Cat",
     ]
+    exclude_link = [ r"/tag/", r"/tags/", r"\.pdf$" ]
+    exclude_title = [ r"[-0-9][1-9][0-9][^0-9]", r"^[1-9][0-9][^0-9]", r"PDF" ]
     exclude_keywords = [
         "記事が見つかりません","記事は見つかりません","公開期間が終了","公開期間を終了","公開期間は終了", "ページが見つかりません", "ページは見つかりません", "まとめ", "Page Not Found", "page not found", "Page not found",
         "販売", "価格", "値段", "譲渡会", "殺処分", "購入", "プロモーション", "%オフ", "％オフ", "%Off", "%OFF", "％OFF", "セール", "里親募集",
@@ -258,7 +260,12 @@ def neko_news():
     hashtag_list_jp = [ "#猫", "#cats", "#猫好きさんと繋がりたい","#CatsOnTwitter", "#funnyanimals"]
     hashtag_list_en = [ "#cat", "#CatsAreFamily", "#pets", "#CatsOnTwitter", "#funnyanimals"]
 
-    site_hist = TweetHist( "tweet_hist.json" )
+    try:
+        site_hist = TweetHist( "tweet_hist.json" )
+    except Exception as ex:
+        print(ex)
+        print("履歴を読み込めませんでした")
+       # return
     # ツイート履歴管理
 
     # 類似記事除外リミット
@@ -299,9 +306,18 @@ def neko_news():
             print( f"SKIP: 除外ホストが含まれる: {a}")
             continue
         # 除外キーワード判定
+        a=[ r for r in exclude_link if re.search( r, site_link) ]
+        if len(a)>0:
+            print( f"SKIP: 除外キーワードがタイトルに含まれる: {a}")
+            continue
+        a=[ r for r in exclude_title if re.search( r, site_title) ]
+        if len(a)>0:
+            print( f"SKIP: 除外キーワードがタイトルに含まれる: {a}")
+            continue
+        # 除外キーワード判定
         a=[ keyword for keyword in exclude_keywords if site_title.find(keyword)>=0]
         if len(a)>0:
-            print( f"SKIP: 除外キーワードが含まれる: {a}")
+            print( f"SKIP: 除外キーワードがタイトルに含まれる: {a}")
             continue
         # 除外サイト
         if exclude_site.get( site_hostname, None ) is not None or "manga" in site_link:
