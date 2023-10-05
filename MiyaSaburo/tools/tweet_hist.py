@@ -1,5 +1,5 @@
 import json
-import os
+import os, shutil
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import openai
@@ -27,16 +27,25 @@ class TweetHist:
         """ self.jsonpathがあれば、self.histに読み込む。なければ読まない"""
         if os.path.exists(self.jsonpath):
             with open(self.jsonpath, 'r', encoding='utf-8') as f:
-                self.hist = json.load(f)
+                h = json.load(f)
+                self.hist = h
 
     def save(self):
         """ self.histをself.jsonpathに書き込む """
         directory = os.path.dirname(self.jsonpath)
         if directory is not None and len(directory)>0 and not os.path.exists(directory):
             os.makedirs(directory)
-        
-        with open(self.jsonpath, 'w', encoding='utf-8') as f:
-            json.dump(self.hist, f, indent=4, ensure_ascii=False, cls=CustomJsonEncorder)
+                
+        tmp_path = self.jsonpath+".tmp"
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.hist, f, indent=4, ensure_ascii=False, cls=CustomJsonEncorder)
+            shutil.move( tmp_path, self.jsonpath )
+        finally:
+            try:
+                os.remove( tmp_path )
+            except:
+                pass
 
     def is_used(self, url: str, days: int) -> str:
         """ days日以内に、urlのサイトの記事を使ったか？ """
