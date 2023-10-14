@@ -173,11 +173,6 @@ def neko_news():
         "",
         "# 強調:",
         "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出す。不要な言葉やフレーズがないか確認する。注意を引くメッセージ、感情を喚起する可能性があります。",
-        "",
-        "# 言語と文字数:",
-        "野良猫っぽいツイートを{}で{}文字以内で生成するにゃ。絵文字は無し",
-        "",
-        "# ツイート:"
     ] )
     prompt_fmt2 = "\n".join( [
         "上記の記事から、制約条件とターゲットと留意点に沿って、バズるツイート内容を記述して下さいにゃ。",
@@ -190,11 +185,6 @@ def neko_news():
         "",
         "# 強調:",
         "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出して下さい。",
-        "",
-        "# 言語と文字数:",
-        "野良猫っぽい皮肉やジョークを含めたツイートを{}で{}文字以内で生成するにゃ。絵文字は無し",
-        "",
-        "# ツイート:"
     ] )
 
 
@@ -213,7 +203,8 @@ def neko_news():
         "改善点：",
     ])
 
-    update_prompt = "上記の改善点を踏まえて、野良猫っぽいツイートを{}で{}文字以内で生成するにゃ。絵文字は無し\n\nツイート:"
+    buzz_prompt = "\n\n# バズワード: 次のワードが現在のトレンドバズワードにゃ。\n{}"
+    update_prompt = "\n\n上記を踏まえて、野良猫っぽい皮肉やジョークを含めたツイートを{}で{}文字以内で生成するにゃ。絵文字は無しにゃ\n# ツイート:"
 
 
     exclude_site = {
@@ -279,11 +270,11 @@ def neko_news():
     for d in Ite:
         if output_jp>=tw_count_max and output_en>=tw_count_max:
             break
-        site_title = d.get('title',"")
-        site_link = d.get('link',"")
-        site_prop = d.get('prop',{})
-        site_url = urlparse(site_link)
-        site_hostname = site_url.netloc
+        site_title: str = d.get('title',"")
+        site_link: str = d.get('link',"")
+        site_prop: dict = d.get('prop',{})
+        site_url: str = urlparse(site_link)
+        site_hostname: str = site_url.netloc
 
         print("----記事判定---------------------------------------------------")
         print( f"記事タイトル:{site_title}")
@@ -340,15 +331,33 @@ def neko_news():
         if len(site_text)<100:
             print( f"ERROR: 本文が100文字以下")
             continue
-        # 単純な言語判定
-        if output_jp>=tw_count_max and not Utils.contains_kana(site_text):
-            print( f"SKIP: 日本語ツイート本数を超過" )
+        if len([line for line in site_text.split('\n') if line.strip()])<10:
+            print( f"ERROR: 本文が10行以下")
             continue
+        # 単純な言語判定
+        simple_lang_jp:bool = Utils.contains_kana(site_text)
+        buzz_word: str = None
+        if simple_lang_jp:
+            buzz_word = site_prop.get('buzz_jp',None)
+            # 日本語記事ならば、日本の記事を英訳した可能性がある
+        else:
+            buzz_word = site_prop.get('buzz_en',None)
+            # 日本語じゃない記事ならば日本語でツイートするのは確実
+            if output_jp>=tw_count_max:
+                print( f"SKIP: 日本語ツイート本数を超過" )
+                continue
         # 必須キーワード判定
         a=[ keyword for keyword in must_keywords if site_text.find(keyword)>=0]
         if len(a)==0:
             print( f"SKIP: 必須キーワードが含まれない")
             continue
+        # バズワード判定
+        if buzz_word is not None and len(buzz_word)>0:
+            if site_text.find( buzz_word )<0:
+                print( f"SKIP: バズワードが含まれない")
+                continue
+        else:
+            buzz_word=None
         # 除外キーワード判定
         a=[ keyword for keyword in exclude_keywords if site_text.find(keyword)>=0]
         if len(a)>0:
@@ -455,7 +464,11 @@ def neko_news():
 
         msg_hist = []
         msg_hist += [ {"role": "user", "content": article_fmt.format( site_title, site_text[:2000] ) } ]
-        msg_hist += [ {"role": "system", "content": prompt_fmt2.format( post_ln, chars_limit) } ]
+        gen_prompt = prompt_fmt2
+        if buzz_word is not None:
+            gen_prompt = gen_prompt + buzz_prompt.format(buzz_word)
+        gen_prompt = gen_prompt + update_prompt.format(post_ln,chars_limit)
+        msg_hist += [ {"role": "system", "content": gen_prompt } ]
 
         tweet_text = None
         tweet_score = 0
@@ -546,7 +559,11 @@ def neko_news():
             if try_count>=3:
                 del msg_hist[msg_start:msg_start+2]
             msg_hist += [ {"role": "assistant", "content": base_article } ]
-            msg_hist += [ {"role": "user", "content": evaluate_response + "\n\n" + update_prompt.format( post_ln, chars_limit) } ]
+            gen_prompt = evaluate_response + "\n\n"
+            if buzz_word is not None:
+                gen_prompt = gen_prompt + buzz_prompt.format(buzz_word)
+            gen_prompt = gen_prompt + update_prompt.format( post_ln, chars_limit)
+            msg_hist += [ {"role": "user", "content": gen_prompt } ]
 
 def count_tweet( text: str ) -> int:
     try:
@@ -640,7 +657,7 @@ def Completion( prompt, *, max_tokens=None, temperature=0 ):
                         model="gpt-3.5-turbo-instruct",
                         temperature = temperature, max_tokens=u,
                         prompt=prompt,
-                        request_timeout=(5,25)
+                        request_timeout=(15,120)
                     )
                 break
             except openai.error.Timeout as ex:
@@ -689,7 +706,7 @@ def ChatCompletion( mesg_list, temperature=0 ):
                         model="gpt-3.5-turbo",
                         temperature = temperature,
                         messages=mesg_list,
-                        request_timeout=(5,25)
+                        request_timeout=(15,121)
                     )
                 break
             except openai.error.ServiceUnavailableError as ex:
