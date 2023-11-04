@@ -1,7 +1,8 @@
-import sys,os,re,time,json,re
+import sys,os,re,time,json,re,copy
 import requests
 import traceback
 import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 import datetime
 from zoneinfo import ZoneInfo
 import openai
@@ -12,6 +13,10 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import queue
 import threading
+
+from gtts import gTTS
+from io import BytesIO
+import pygame
 
 Price = {
     "gpt3.5"
@@ -70,6 +75,18 @@ class BotCore:
         self.completion_tokens: int = 0
         self.total_tokens:int  = 0
         self.last_talk_time: float = 0
+        self.info_callback = None
+        self.info_data:dict = {}
+        self._before_info_data = None
+        self.connect_timeout:float = 10.0
+        self.read_timeout:float = 60.0
+
+    def update_info( self, data:dict ) -> None:
+        BotUtils.update_dict( data, self.info_data )
+        if not self.info_data == self._before_info_data:
+            self._before_info_data = copy.deepcopy( self.info_data )
+            if self.info_callback is not None:
+                self.info_callback( self.info_data )
 
     def token_usage( self, response ):
         with self.lock:
@@ -125,7 +142,7 @@ class BotCore:
                             model="gpt-3.5-turbo-instruct",
                             temperature = temperature, max_tokens=u,
                             prompt=prompt,
-                            request_timeout=15
+                            request_timeout=(self.connect_timeout,self.read_timeout)
                         )
                     break
                 except openai.error.Timeout as ex:
@@ -169,7 +186,7 @@ class BotCore:
             traceback.print_exc()
             return None
 
-    def ChatCompletion( self, mesg_list, temperature=0 ):
+    def ChatCompletion( self, mesg_list:list[dict], temperature=0, stop=["\n", "。", "？", "！"] ):
         try:
             api_logger.debug( "request" + "\n" + json.dumps( mesg_list, indent=2, ensure_ascii=False) )
 
@@ -183,7 +200,7 @@ class BotCore:
                             model="gpt-3.5-turbo",
                             temperature = temperature,
                             messages=mesg_list,
-                            request_timeout=30
+                            request_timeout=(self.connect_timeout,self.read_timeout)
                         )
                     api_logger.debug( "response" + "\n" + json.dumps( response, indent=2, ensure_ascii=False) )
                     break
@@ -225,6 +242,172 @@ class BotCore:
             return None
 
         return content
+    
+class TalkEngine:
+    VoiceList = [
+        ( "gTTS[ja_JP]", -1, 'ja_JP' ),
+        ( "gTTS[en_US]", -1, 'en_US' ),
+        ( "gTTS[en_GB]", -1, 'en_GB' ),
+        ( "gTTS[fr_FR]", -1, 'fr_FR' ),
+        ( "VOICEVOX:四国めたん [あまあま]", 0, 'ja_JP' ),
+        ( "VOICEVOX:四国めたん [ノーマル]", 2, 'ja_JP' ),
+        ( "VOICEVOX:四国めたん [セクシー]", 4, 'ja_JP' ),
+        ( "VOICEVOX:四国めたん [ツンツン]", 6, 'ja_JP' ),
+        ( "VOICEVOX:ずんだもん [あまあま]", 1, 'ja_JP' ),
+        ( "VOICEVOX:ずんだもん [ノーマル]", 3, 'ja_JP' ),
+        ( "VOICEVOX:ずんだもん [セクシー]", 5, 'ja_JP' ),
+        ( "VOICEVOX:ずんだもん [ツンツン]", 7, 'ja_JP' ),
+        ( "VOICEVOX:春日部つむぎ [ノーマル]",8, 'ja_JP' ),
+        ( "VOICEVOX:波音リツ [ノーマル]", 9, 'ja_JP' ),
+        ( "VOICEVOX:雨晴はう [ノーマル]", 10, 'ja_JP' ),
+        ( "VOICEVOX:玄野武宏 [ノーマル]", 11, 'ja_JP' ),
+        ( "VOICEVOX:白上虎太郎 [ふつう]", 11, 'ja_JP' ),
+        ( "VOICEVOX:白上虎太郎 [わーい]", 32, 'ja_JP' ),
+        ( "VOICEVOX:白上虎太郎 [びくびく]", 33, 'ja_JP' ),
+        ( "VOICEVOX:白上虎太郎 [おこ]", 34, 'ja_JP' ),
+        ( "VOICEVOX:白上虎太郎 [びえーん]", 36, 'ja_JP' ),
+        ( "VOICEVOX:もち子(cv 明日葉よもぎ)[ノーマル]", 20, 'ja_JP' ),
+    ]
+
+    def __init__(self, *, submit_call = None, start_call = None ):
+        self.lock: threading.Lock = threading.Lock()
+        self._running_future:Future = None
+        self._running_future2:Future = None
+        self.idx: int = 0
+        self.wave_queue:queue.Queue = queue.Queue()
+        self.play_queue:queue.Queue = queue.Queue()
+        self.speaker = 3
+        self.submit_call = submit_call
+        self.start_call = start_call
+        self.pygame_init:bool = False
+
+    def cancel(self):
+        self.idx += 1
+
+    def add_talk(self, full_text:str, emotion:int = 0 ) -> None:
+        idx:int = self.idx
+        for text in TalkEngine.split_string(full_text):
+            self.wave_queue.put( (idx, text, emotion ) )
+        with self.lock:
+            if self._running_future is None:
+                self._running_future = self.submit_call(self.run_text_to_audio)
+    
+    def run_text_to_audio(self)->None:
+        while True:
+            idx:int = -1
+            text:str = None
+            emotion:int = -1
+            with self.lock:
+                try:
+                    idx, text, emotion = self.wave_queue.get_nowait()
+                except Exception as ex:
+                    if not isinstance( ex, queue.Empty ):
+                        traceback.print_exc()
+                    idx=-1
+                    text = None
+                if text is None:
+                    self._running_future = None
+                    return
+            try:
+                if idx == self.idx:
+                    # textから音声へ
+                    audio_bytes:bytes = self._text_to_audio( text, emotion )
+                    self._add_audio( idx,text,emotion,audio_bytes )
+            except Exception as ex:
+                traceback.print_exc()
+
+    def _add_audio( self, idx:int, text:str, emotion:int, audio_bytes: bytes ) -> None:
+        self.play_queue.put( (idx,text,emotion,audio_bytes) )
+        with self.lock:
+            if self._running_future2 is None:
+                self._running_future2 = self.submit_call(self.run_talk)
+    
+
+    def _post_audio_query_b(self, text: str, emotion:int = 0) -> bytes:
+        sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
+        sv_port: str = os.getenv('VOICEVOX_PORT','50021')
+        params = {'text': text, 'speaker': self.speaker}
+        res1 : requests.Response = requests.post( f'http://{sv_host}:{sv_port}/audio_query', params=params)
+
+        params = {'speaker': self.speaker}
+        headers = {'content-type': 'application/json'}
+        res = requests.post(
+            f'http://{sv_host}:{sv_port}/synthesis',
+            data=res1.content,
+            params=params,
+            headers=headers
+        )
+        return res.content
+
+    def _text_to_audio( self, text: str, emotion:int = 0, lang='ja' ) -> bytes:
+        if self.speaker<0:
+            tts = gTTS(text=text, lang=lang,lang_check=False )
+            with BytesIO() as buffer:
+                tts.write_to_fp(buffer)
+                mp3 = buffer.getvalue()
+                del tts
+                return mp3
+        else:
+            start1 = int(time.time()*1000)
+            wave: bytes = self._post_audio_query_b( text, emotion )
+            start3 = int(time.time()*1000)
+            print(f"[VOICEVOX] {start3-start1}")
+            return wave
+        
+    def run_talk(self)->None:
+        start:bool = False
+        while True:
+            idx:int = -1
+            text:str = None
+            emotion: int = 0
+            audio:bytes = None
+            with self.lock:
+                try:
+                    idx, text, emotion, audio = self.play_queue.get_nowait()
+                except Exception as ex:
+                    if not isinstance( ex, queue.Empty ):
+                        traceback.print_exc()
+                    idx=-1
+                    text = None
+                    audio = None
+                if text is None:
+                    self._running_future2 = None
+                    return
+            try:
+                if idx == self.idx:
+                    if not self.pygame_init:
+                        pygame.mixer.pre_init(16000,-16,1,10240)
+                        pygame.mixer.quit()
+                        pygame.mixer.init()
+                        self.pygame_init = True
+                    mp3_buffer = BytesIO(audio)
+                    pygame.mixer.music.load(mp3_buffer)
+                    pygame.mixer.music.play(1)
+                    if self.start_call is not None:
+                        self.start_call( text, emotion )
+                    while pygame.mixer.music.get_busy():
+                        if idx != self.idx:
+                            pygame.mixer.music.stop()
+                            break
+                        time.sleep(0.2)
+                    
+            except Exception as ex:
+                traceback.print_exc()
+
+    @staticmethod
+    def split_string(text:str) -> list[str]:
+        # 文字列を改行で分割
+        lines = text.split("\n")
+        # 句読点で分割するための正規表現パターン
+        pattern = r"(?<=[。．！？])"
+        # 分割結果を格納するリスト
+        result = []
+        # 各行を句読点で分割し、結果をリストに追加
+        for line in lines:
+            sentences = re.split(pattern, line)
+            result.extend(sentences)
+        # 空の要素を削除して結果を返す
+        return list(filter(None, result))
 
 class BotUtils:
 
@@ -294,6 +477,34 @@ class BotUtils:
                 out[key]=inp_val
 
     @staticmethod
+    def length( value ) -> int:
+        if hasattr(value,'__len__'):
+            return len(value)
+        return -1
+
+    @staticmethod
+    def eq( valueA, valueB ) -> bool:
+        if type(valueA) != type(valueB):
+            return False
+        l = BotUtils.length(valueA)
+        if l != BotUtils.length(valueB):
+            return False
+        if isinstance(valueA,dict):
+            for key in valueA.keys():
+                if key not in valueB:
+                    return False
+                if not BotUtils.eq( valueA[key], valueB[key] ):
+                    return False
+        elif isinstance(valueA,list):
+            for idx in range(0,l):
+                if not BotUtils.eq( valueA[idx], valueB[idx] ):
+                    return False
+        else:
+            if valueA != valueB:
+                return False
+        return True
+
+    @staticmethod
     def find_key( key:str, text:str, st:int=0, ed:int=None ):
         if ed is None:
             ed=len(key)
@@ -347,6 +558,7 @@ class BotUtils:
             tst = tst + indent + "    " + val
         return tst
 
+    @staticmethod
     def get_location():
         try:
             geo_request_url = 'https://get.geojs.io/v1/ip/geo.json'
@@ -360,7 +572,20 @@ class BotUtils:
         except Exception as ex:
             pass
 
+    @staticmethod
+    def get_queue( queue:queue.Queue ):
+        try:
+            return queue.get_nowait()
+        except:
+            pass
+        return None
+
+
 def test():
+    BotUtils.eq(
+         { 'a': '1', 'b': '2'},
+         { 'a': '1', 'b': '2'}
+    )
     BotUtils.get_location()
     text:str = """
     aa:

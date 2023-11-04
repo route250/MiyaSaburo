@@ -99,26 +99,30 @@ def debug_ui( bot ):
     root.geometry("1000x800")
     # 左側の列
     history_textarea = scrolledtext.ScrolledText(root, height=10)
-    history_textarea.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
-
     send_textarea = scrolledtext.ScrolledText(root, height=3)
-    send_textarea.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
 
     def send_to_bot():
         response_text = send_textarea.get('1.0', tk.END)
         if bot.add_talk( response_text.strip() ):
             send_textarea.delete('1.0',tk.END)
+    send_button = tk.Button(root, text=">>", command=send_to_bot)
 
-    send_button = tk.Button(root, text="Send Prompt", command=send_to_bot)
-    send_button.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+    info_textarea = scrolledtext.ScrolledText(root, height=200 )
+
+
+    history_textarea.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
+    send_textarea.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+    send_button.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+    info_textarea.grid(row=0, rowspan=2, column=2, padx=10, pady=5, sticky="ew")
 
     # ウィンドウのグリッド設定
-    root.grid_columnconfigure(0, weight=1)
+    root.grid_columnconfigure(0, weight=10)
+    root.grid_columnconfigure(1, weight=1)
+    root.grid_columnconfigure(2, weight=10)
     root.grid_rowconfigure(0, weight=10)
     root.grid_rowconfigure(1, weight=3)
-    root.grid_rowconfigure(2, weight=1)
 
-    def append_message( role, message ):
+    def append_message( role, message:str, emotion:int=0 ):
         current:str = history_textarea.get(1.0,tk.END)
         text:str = f"{role}: {message}"
         if len(current.strip())==0:
@@ -127,7 +131,13 @@ def debug_ui( bot ):
         else:
             history_textarea.insert(tk.END,"\n"+text)
 
-    bot.chat_callback = lambda role,message: append_message(role,message)
+    bot.chat_callback = lambda role,message,emotion: append_message(role,message,emotion)
+
+    def update_info( data ):
+        message:str = json.dumps( data, indent=4, ensure_ascii=False, sort_keys=True )
+        info_textarea.delete(1.0,tk.END)
+        info_textarea.insert(1.0,message)
+    bot.info_callback = lambda data: update_info(data)
 
     # GUIを更新するためにメインスレッドで定期的に呼び出される関数
     def check_queue():
