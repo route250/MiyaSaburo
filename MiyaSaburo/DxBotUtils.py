@@ -1,5 +1,6 @@
 import sys,os,re,time,json,re,copy
 import requests
+from requests.adapters import HTTPAdapter
 import traceback
 import threading
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -45,14 +46,6 @@ loghdr = TimedRotatingFileHandler('logs/api.log', when='midnight', backupCount=7
 loghdr.setFormatter( logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 api_logger.addHandler(loghdr)
 
-if __name__ == "__main__":
-    pre = os.getenv('OPENAI_API_KEY')
-    Utils.load_env( ".miyasaburo.conf" )
-    after = os.getenv('OPENAI_API_KEY')
-    if after is not None and pre != after:
-        logger.info("UPDATE OPENAI_API_KEY")
-        openai.api_key=after
-
 z_next_id: int = 10000
 
 def next_id():
@@ -80,6 +73,7 @@ class BotCore:
         self._before_info_data = None
         self.connect_timeout:float = 10.0
         self.read_timeout:float = 60.0
+        self._load_api_key: bool = False
 
     def update_info( self, data:dict ) -> None:
         BotUtils.update_dict( data, self.info_data )
@@ -163,6 +157,12 @@ class BotCore:
                         time.sleep(5)
                     else:
                         raise ex
+                except openai.error.AuthenticationError as ex:
+                    if not self._load_api_key:
+                        self._load_api_key=True
+                        BotUtils.load_api_keys()
+                    else:
+                        raise ex
 
             self.token_usage( response )           
             if response is None or response.choices is None or len(response.choices)==0:
@@ -218,7 +218,13 @@ class BotCore:
                         time.sleep(5)
                     else:
                         raise ex
-                
+                except openai.error.AuthenticationError as ex:
+                    if not self._load_api_key:
+                        self._load_api_key=True
+                        BotUtils.load_api_keys()
+                    else:
+                        raise ex
+
             if response is None or response.choices is None or len(response.choices)==0:
                 logger.error( f"invalid response from openai\n{response}")
                 return None
@@ -269,127 +275,163 @@ class TalkEngine:
         ( "VOICEVOX:もち子(cv 明日葉よもぎ)[ノーマル]", 20, 'ja_JP' ),
     ]
 
-    def __init__(self, *, submit_call = None, start_call = None ):
+    @staticmethod
+    def id_to_name( idx:int ) -> str:
+        return next((voice for voice in TalkEngine.VoiceList if voice[1] == idx), "???")
+
+    def __init__(self, *, submit_task = None, talk_callback = None ):
         self.lock: threading.Lock = threading.Lock()
         self._running_future:Future = None
         self._running_future2:Future = None
-        self.idx: int = 0
+        self._talk_id: int = 0
         self.wave_queue:queue.Queue = queue.Queue()
         self.play_queue:queue.Queue = queue.Queue()
         self.speaker = 3
-        self.submit_call = submit_call
-        self.start_call = start_call
+        self.submit_call = submit_task
+        self.start_call = talk_callback
         self.pygame_init:bool = False
+        self._disable_voicevox: float = 0.0
+        self._disable_gtts: float = 0.0
 
     def cancel(self):
-        self.idx += 1
+        self._talk_id += 1
 
     def add_talk(self, full_text:str, emotion:int = 0 ) -> None:
-        idx:int = self.idx
+        talk_id:int = self._talk_id
         for text in TalkEngine.split_string(full_text):
-            self.wave_queue.put( (idx, text, emotion ) )
+            self.wave_queue.put( (talk_id, text, emotion ) )
         with self.lock:
             if self._running_future is None:
                 self._running_future = self.submit_call(self.run_text_to_audio)
     
     def run_text_to_audio(self)->None:
         while True:
-            idx:int = -1
+            talk_id:int = -1
             text:str = None
             emotion:int = -1
             with self.lock:
                 try:
-                    idx, text, emotion = self.wave_queue.get_nowait()
+                    talk_id, text, emotion = self.wave_queue.get_nowait()
                 except Exception as ex:
                     if not isinstance( ex, queue.Empty ):
                         traceback.print_exc()
-                    idx=-1
+                    talk_id=-1
                     text = None
                 if text is None:
                     self._running_future = None
                     return
             try:
-                if idx == self.idx:
+                if talk_id == self._talk_id:
                     # textから音声へ
-                    audio_bytes:bytes = self._text_to_audio( text, emotion )
-                    self._add_audio( idx,text,emotion,audio_bytes )
+                    audio_bytes, model = self._text_to_audio( text, emotion )
+                    self._add_audio( talk_id,text,emotion,audio_bytes,model )
             except Exception as ex:
                 traceback.print_exc()
 
-    def _add_audio( self, idx:int, text:str, emotion:int, audio_bytes: bytes ) -> None:
-        self.play_queue.put( (idx,text,emotion,audio_bytes) )
+    def _add_audio( self, talk_id:int, text:str, emotion:int, audio_bytes: bytes, model:str=None ) -> None:
+        self.play_queue.put( (talk_id,text,emotion,audio_bytes,model) )
         with self.lock:
             if self._running_future2 is None:
                 self._running_future2 = self.submit_call(self.run_talk)
-    
 
-    def _post_audio_query_b(self, text: str, emotion:int = 0) -> bytes:
-        sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
-        sv_port: str = os.getenv('VOICEVOX_PORT','50021')
-        params = {'text': text, 'speaker': self.speaker}
-        res1 : requests.Response = requests.post( f'http://{sv_host}:{sv_port}/audio_query', params=params)
+    def _text_to_audio_by_voicevox(self, text: str, emotion:int = 0, lang='ja') -> bytes:
+        if self._disable_voicevox>0 and (time.time()-self._disable_voicevox)<180.0:
+            return None,None
+        try:
+            self._disable_voicevox = 0
+            sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
+            sv_port: str = os.getenv('VOICEVOX_PORT','50021')
+            timeout = (5.0,180.0)
+            params = {'text': text, 'speaker': self.speaker, 'timeout': timeout }
+            s = requests.Session()
+            s.mount(f'http://{sv_host}:{sv_port}/audio_query', HTTPAdapter(max_retries=1))
+            res1 : requests.Response = requests.post( f'http://{sv_host}:{sv_port}/audio_query', params=params)
 
-        params = {'speaker': self.speaker}
-        headers = {'content-type': 'application/json'}
-        res = requests.post(
-            f'http://{sv_host}:{sv_port}/synthesis',
-            data=res1.content,
-            params=params,
-            headers=headers
-        )
-        return res.content
+            params = {'speaker': self.speaker, 'timeout': timeout }
+            headers = {'content-type': 'application/json'}
+            res = requests.post(
+                f'http://{sv_host}:{sv_port}/synthesis',
+                data=res1.content,
+                params=params,
+                headers=headers
+            )
+            model:str = TalkEngine.id_to_name(self.speaker)
+            return res.content, model
+        except requests.exceptions.ConnectTimeout as ex:
+            print( f"[VOICEVOX] timeout")
+        except Exception as ex:
+            print( f"[VOICEVOX] {ex}")
+            traceback.print_exc()
+        self._disable_voicevox = time.time()
+        return None,None
 
-    def _text_to_audio( self, text: str, emotion:int = 0, lang='ja' ) -> bytes:
-        if self.speaker<0:
+    def _text_to_audio_by_gtts(self, text: str, emotion:int = 0, lang='ja') -> bytes:
+        if self._disable_gtts>0 and (time.time()-self._disable_gtts)<180.0:
+            return None,None
+        try:
+            self._disable_gtts = 0
             tts = gTTS(text=text, lang=lang,lang_check=False )
             with BytesIO() as buffer:
                 tts.write_to_fp(buffer)
-                mp3 = buffer.getvalue()
+                wave:bytes = buffer.getvalue()
                 del tts
-                return mp3
-        else:
-            start1 = int(time.time()*1000)
-            wave: bytes = self._post_audio_query_b( text, emotion )
-            start3 = int(time.time()*1000)
-            print(f"[VOICEVOX] {start3-start1}")
-            return wave
+                return wave,f"gTTS[{lang}]"
+        except requests.exceptions.ConnectTimeout as ex:
+            print( f"[gTTS] timeout")
+        except Exception as ex:
+            print( f"[gTTS] {ex}")
+            traceback.print_exc()
+        self._disable_gtts = time.time()
+        return None,None
+
+    def _text_to_audio( self, text: str, emotion:int = 0, lang='ja' ) -> bytes:
+        wave: bytes = None
+        model:str = None
+        if self.speaker>=0 and lang=='ja':
+            wave, model = self._text_to_audio_by_voicevox( text, emotion, lang=lang )
+        if wave is None:
+            wave, model = self._text_to_audio_by_gtts( text, emotion, lang=lang )
+        return wave,model
         
     def run_talk(self)->None:
         start:bool = False
         while True:
-            idx:int = -1
+            talk_id:int = -1
             text:str = None
             emotion: int = 0
             audio:bytes = None
+            model:str = None
             with self.lock:
                 try:
-                    idx, text, emotion, audio = self.play_queue.get_nowait()
+                    talk_id, text, emotion, audio, model = self.play_queue.get_nowait()
                 except Exception as ex:
                     if not isinstance( ex, queue.Empty ):
                         traceback.print_exc()
-                    idx=-1
+                    talk_id=-1
                     text = None
                     audio = None
                 if text is None:
                     self._running_future2 = None
                     return
             try:
-                if idx == self.idx:
-                    if not self.pygame_init:
-                        pygame.mixer.pre_init(16000,-16,1,10240)
-                        pygame.mixer.quit()
-                        pygame.mixer.init()
-                        self.pygame_init = True
-                    mp3_buffer = BytesIO(audio)
-                    pygame.mixer.music.load(mp3_buffer)
-                    pygame.mixer.music.play(1)
+                if talk_id == self._talk_id:
+                    if audio is not None:
+                        if not self.pygame_init:
+                            pygame.mixer.pre_init(16000,-16,1,10240)
+                            pygame.mixer.quit()
+                            pygame.mixer.init()
+                            self.pygame_init = True
+                        mp3_buffer = BytesIO(audio)
+                        pygame.mixer.music.load(mp3_buffer)
+                        pygame.mixer.music.play(1)
                     if self.start_call is not None:
-                        self.start_call( text, emotion )
-                    while pygame.mixer.music.get_busy():
-                        if idx != self.idx:
-                            pygame.mixer.music.stop()
-                            break
-                        time.sleep(0.2)
+                        self.start_call( text, emotion, model )
+                    if audio is not None:
+                        while pygame.mixer.music.get_busy():
+                            if talk_id != self._talk_id:
+                                pygame.mixer.music.stop()
+                                break
+                            time.sleep(0.2)
                     
             except Exception as ex:
                 traceback.print_exc()
@@ -410,6 +452,15 @@ class TalkEngine:
         return list(filter(None, result))
 
 class BotUtils:
+
+    @staticmethod
+    def load_api_keys():
+        pre = os.getenv('OPENAI_API_KEY')
+        Utils.load_env( ".miyasaburo.conf" )
+        after = os.getenv('OPENAI_API_KEY')
+        if after is not None and pre != after:
+            logger.info("UPDATE OPENAI_API_KEY")
+            openai.api_key=after
 
     @staticmethod
     def formatted_current_datetime():

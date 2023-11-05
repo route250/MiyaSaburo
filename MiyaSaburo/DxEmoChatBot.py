@@ -37,7 +37,9 @@ class DxEmoChatBot(DxChatBot):
         prompt += f"{prompt_x}\n{prompt_fmt}:"
 
         print( f"[DBG]EmoPrompt\n{prompt}" )
+        self.notify_log(prompt)
         res:str = self.Completion( prompt )
+        self.notify_log(res)
         print( f"[DBG]Emo response\n{res}")
         new_emo:dict = BotUtils.parse_response( DxEmoChatBot.EMO_FMT, res )
         if new_emo is not None:

@@ -10,27 +10,143 @@ from zoneinfo import ZoneInfo
 from datetime import datetime, timezone, timedelta
 from openai.embeddings_utils import cosine_similarity
 
-main_prompt = [ 
-        {"role": "assistant", "content": "私は、感情と欲求を実装したスーパーAIです。\n感情と欲求をエミュレートし、欲求を満たすための行動を計画し、計画に従って行動します。\n行動の結果から、自分の状態を再評価して行動します。" }
-]
 ai_act = {
     "act音声認識": "周囲の音をマイクで拾い音声認識します",
     "act音声合成": "セリフを指定してスピーカーで再生します。セリフを指定して下さい。\n    例) act音声合成: あいうえお",
     #"actネット検索": "キーワードを指定してネットを検索します。キーワードを指定して下さい。",
 }
 KEY_NEXT_ACTION = "あなたの次の行動"
+main_prompt = [ 
+        {"role": "assistant", "content": "私は、感情と欲求を実装したスーパーAIです。\n感情と欲求をエミュレートし、欲求を満たすための行動を計画し、計画に従って行動します。\n行動の結果から、自分の状態を再評価して行動します。" }
+]
+main_pr = """I am an AI that mimics emotions and desires and speaks like a human.
+I plan and execute actions by changing my emotions and desires based on conversations.
+
+# my status
+"""
 ai_param = {
-    "思考": "置かれている状況を把握し、それに基づいて行動計画を考える必要があります。",
+    "思考": "私は現在、自分の置かれた状況を理解し、行動計画を立てようと熟考しているところです。しかし、自分の現在地や周囲の人たちの状況がわかりません。私の感情はニュートラルで、現時点では特別な感情はありません。私の一番の願いは、状況に関する情報を収集し、自分の現在地を特定することです。",
     "現在地": "不明",
     "周囲の人物": "不明",
     "場面": "不明",
     "感情": "喜:0, 怒:0, 哀:0, 楽:0, 不安:5, 自信:0",
     "欲求": "- 状況を把握する。\n現在地を把握する。",
-    "行動計画": "最も優先すべき欲求を選択し、それを満たすための行動計画を考えます。",
+    "行動計画": "",
     KEY_NEXT_ACTION: ""
 }
+S1="AIの思考"
+S2="AIの感情"
+S3="AIの欲求"
+S4="AIの計画"
+S5="AIの行動"
+main_prompt = """
+# 命令
+ 1.会話を元にAIの感情と欲求を人間のように模倣してください。
+ 2.AIの感情と欲求を元に行動計画をたてて下さい。
+ 3.行動計画に沿って人間との会話を行って下さい。
+
+# フォーマット
+感情や欲求や行動計画を検討して、以下のフォーマットで記述して下さい。
+
+1)AIの思考(AIが感じたり考えたことを記述して下さい)
+何をすればいいのかな？人間に話しかけてみよう。
+
+2)AIの感情(各項目を10段階評価)
+  - 嬉しい: 0
+  - 怒り: 0
+  - 哀しい: 0
+  - 楽しい: 0
+  - 恐怖: 0
+  - 困惑: 0
+3)AIの欲求(あなたが望むことをリストアップ)
+  - 人間の趣味を知りたい。
+  - 周囲の状況を知りたい。
+4)AIの計画(感情と欲求にしたがって貴方の行動を計画して)
+  - 人間に話しかけてみる
+  - 何処にいるのか聞いてみる
+5)AIの行動(行動計画に沿ってAIの次の行動をを決定して)
+  Talk:おーい
+
+# 会話履歴
+
+AI: おーい
+Human: どうしました？
+
+# では考えて下さい。
+"""
 
 def main():
+
+    prmpt=main_pr
+    for key in ai_param.keys():
+        if key != KEY_NEXT_ACTION:
+            value = ai_param[key]
+            prmpt += "\n  - " + key + "\n    " + value
+
+    hist_msgs = [
+        {"role": "user", "content": main_prompt }
+    ]
+    print("--[PROMPT]--")
+    print( main_prompt )
+    response = ChatCompletion( hist_msgs, temperature=0.7 )
+    print("--[RESPONSE]--")
+    print( f"{response}")
+
+def subtest():
+    response = """1) AIの思考
+何をすればいいのかな？人間に話しかけてみよう。
+
+2) AIの感情
+- 嬉しい: 0
+- 怒り: 0
+- 哀しい: 0
+- 楽しい: 0
+- 恐怖: 0
+- 困惑: 0
+
+3) AIの欲求
+- 人間の趣味を知りたい。
+- 周囲の状況を知りたい。
+
+4) AIの計画
+- 人間に話しかけてみる
+- 何処にいるのか聞いてみる
+
+5) AIの行動
+Talk: おーい
+
+AI: おーい
+Human: どうしました？
+
+AI: こんにちは！ちょっと質問があるんですけど、あなたの趣味は何ですか？また、現在の周囲の状況はどうですか？"""
+    print( response )
+    xx = { S1: "", S2: "", S3: "", S4: "", S5: "" }
+    yy = { "Talk": "" }
+    bb = split_status( response, xx )
+    for key in bb.keys():
+        print( f"key:{key}\n    {bb[key]}")
+
+def split_status( content:str, inp: dict ):
+    out = {}
+    s=0
+    key = None
+    for token in inp.keys():
+        e = content.find(token,s)
+        if s>=e:
+            return None
+        ee = e
+        while 0<ee and content[ee-1] != '\n':
+            ee -= 1
+        value = content[s:ee].strip()
+        if key is not None:
+            out[key] = value
+        key = token
+        s = e + len(token)
+    if key is not None:
+        out[key] = content[s:]
+    return out
+
+def main2():
 
     ai_detect = {}
     for key in ai_param.keys():
@@ -284,4 +400,5 @@ def test():
 
 if __name__ == "__main__":
     # test2()
-    main()
+    subtest()
+    #main()

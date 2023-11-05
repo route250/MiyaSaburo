@@ -79,58 +79,63 @@ def exp_ui( root, parent, bot ):
     parent.grid_rowconfigure(2, weight=0)
     parent.grid_rowconfigure(3, weight=2)
 
-
+TK_FILL="n"
 def chat_ui( root, parent, bot ):
     # キューの作成
     update_queue = queue.Queue()
 
     # 左側の列
     history_textarea = scrolledtext.ScrolledText(parent, height=10)
+    history_textarea.grid(row=0, column=0, columnspan=2, padx=0, pady=0, sticky="nsew")
+    status_label = tk.Label(parent)
+    status_label.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nsew")
     send_textarea = scrolledtext.ScrolledText(parent, height=3)
+    send_textarea.grid(row=2, column=0, padx=0, pady=0, sticky="nsew")
     send_button = tk.Button(parent, text=">>")
+    send_button.grid(row=2, column=1, padx=4, pady=4, sticky="ew")
 
     # 右側の列
     # Notebook（タブコンテナ）の作成
     notebook = ttk.Notebook(parent)
-    notebook.grid( row=0, column=0, pady=10)
-
+    notebook.grid(row=0, rowspan=3, column=2, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S)
+    notebook.rowconfigure(0,weight=1)
+    notebook.columnconfigure(0,weight=1)
     # タブ1のフレームを作成
-    info_tab = ttk.Frame(notebook, width=400, height=280)
-    info_tab.grid( row=0, column=0, pady=10 )
+    info_tab = ttk.Frame(notebook )
+    info_tab.grid( row=0, column=0, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S )
+    info_textarea = scrolledtext.ScrolledText(info_tab )
+    info_textarea.grid( row=0, column=0, padx=4, pady=4, sticky=tk.W + tk.E + tk.N + tk.S )
+    info_tab.rowconfigure(0,weight=1)
+    info_tab.columnconfigure(0,weight=1)
 
     # タブ2のフレームを作成
-    log_tab = ttk.Frame(notebook, width=400, height=280)
-    log_tab.grid( row=0, column=0, pady=10 )
+    log_tab = ttk.Frame(notebook)
+    log_tab.grid( row=0, column=0, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S )
+    log_textarea = scrolledtext.ScrolledText(log_tab )
+    log_textarea.grid( row=0, column=0, padx=4, pady=4, sticky=tk.W + tk.E + tk.N + tk.S )
+    log_tab.rowconfigure(0,weight=1)
+    log_tab.columnconfigure(0,weight=1)
 
     # タブをNotebookに追加
     notebook.add(info_tab, text='Info')
     notebook.add(log_tab, text='Log')
-    
-    info_textarea = scrolledtext.ScrolledText(info_tab, height=200 )
-    info_textarea.grid( row=0, column=0, pady=10 )
-    log_textarea = scrolledtext.ScrolledText(log_tab, height=200 )
-    log_textarea.grid( row=0, column=0, pady=10 )
-
-    history_textarea.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
-    send_textarea.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-    send_button.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
-    notebook.grid(row=0, rowspan=2, column=2, padx=10, pady=5, sticky="ew")
 
     # ウィンドウのグリッド設定
     parent.grid_columnconfigure(0, weight=10)
     parent.grid_columnconfigure(1, weight=1)
     parent.grid_columnconfigure(2, weight=10)
     parent.grid_rowconfigure(0, weight=10)
-    parent.grid_rowconfigure(1, weight=3)
+    parent.grid_rowconfigure(1, weight=1)
+    parent.grid_rowconfigure(2, weight=3)
 
     def send_to_bot():
         response_text = send_textarea.get('1.0', tk.END)
-        if bot.add_talk( response_text.strip() ):
+        if bot.add_user_message( response_text.strip() ):
             send_textarea.delete('1.0',tk.END)
             log_textarea.delete(1.0,tk.END)
     send_button.config(command=send_to_bot)
 
-    def append_message( role, message:str, emotion:int=0 ):
+    def append_message( role, message:str, emotion:int=0, model:str=None ):
         current:str = history_textarea.get(1.0,tk.END)
         text:str = f"{role}: {message}"
         if len(current.strip())==0:
@@ -138,8 +143,9 @@ def chat_ui( root, parent, bot ):
             history_textarea.insert(1.0,text)
         else:
             history_textarea.insert(tk.END,"\n"+text)
+        history_textarea.see( tk.END )
 
-    bot.chat_callback = lambda role,message,emotion: append_message(role,message,emotion)
+    bot.chat_callback = lambda role,message,emotion,model: append_message(role,message,emotion,model)
 
     def update_info( data ):
         message:str = json.dumps( data, indent=4, ensure_ascii=False, sort_keys=True )
@@ -171,7 +177,7 @@ def debug_ui( bot ):
     root.title("LLM Interaction GUI")
 
     # 画面サイズを縦長に設定（幅x高さ）
-    root.geometry("1000x800")
+    root.geometry("1000x600")
 
     # Notebook（タブコンテナ）の作成
     notebook = ttk.Notebook(root)

@@ -46,7 +46,7 @@ class DxChatBot(BotCore):
         self.chat_callback = None
         self.log_callback = None
         self.api_mode = self.set_api_mode(True)
-        self.talk_engine: TalkEngine = TalkEngine( submit_call = self.__submit_call, start_call=self.__start_call )
+        self.talk_engine: TalkEngine = TalkEngine( submit_task = self.__submit_task, talk_callback=self.__talk_callback )
 
     def notify_log(self, message:str ):
         try:
@@ -55,12 +55,12 @@ class DxChatBot(BotCore):
         except:
             traceback.print_exc()
 
-    def __submit_call(self, func ) -> Future:
+    def __submit_task(self, func ) -> Future:
         return self.executor.submit( func )
 
-    def __start_call(self, text:str, emotion:int ):
+    def __talk_callback(self, text:str, emotion:int, model:str ):
         if self.chat_callback is not None:
-            self.chat_callback( ChatMessage.ASSISTANT, text, emotion )
+            self.chat_callback( ChatMessage.ASSISTANT, text, emotion, model )
 
     def set_api_mode( self, mode:bool ) -> bool:
         self.api_mode = mode
@@ -72,7 +72,7 @@ class DxChatBot(BotCore):
         if self.talk_engine is not None:
             self.talk_engine.cancel()
 
-    def add_talk(self, message:str ) -> bool:
+    def add_user_message(self, message:str ) -> bool:
         with self.lock:
             if self.chat_busy is not None:
                 return False
@@ -81,7 +81,7 @@ class DxChatBot(BotCore):
             self.futures.append( self.executor.submit( self.do_talk ) )
         self.cancel()
         if self.chat_callback is not None:
-            self.chat_callback(  ChatMessage.USER, message, 0 )
+            self.chat_callback(  ChatMessage.USER, message, 0, None )
         return True
 
     def create_promptA(self) -> str:

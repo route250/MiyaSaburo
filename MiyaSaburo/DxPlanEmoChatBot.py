@@ -41,7 +41,9 @@ class DxPlanEmoChatBot(DxEmoChatBot):
         prompt += f"Please update your (i.e. {ChatMessage.ASSISTANT}'s) plan in the following format:\n{prompt_fmt}"
 
         print( f"[DBG]plan prompt\n{prompt}" )
+        self.notify_log(prompt)
         res:str = self.Completion( prompt )
+        self.notify_log(res)
         print( f"[DBG]plan response\n{res}")
         new_plan:dict = BotUtils.parse_response( DxPlanEmoChatBot.PLAN_FMT, res )
         if new_plan is not None:
