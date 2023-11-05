@@ -6,7 +6,7 @@ from tkinter import ttk
 from tkinter import scrolledtext
 from DxBotUtils import BotCore, BotUtils
 
-def exp_ui( root, parent, bot ):
+def exp_ui( root, parent, bot:BotCore ):
     def create_prompt():
         try:
             fmt_txt = input_2.get('1.0', tk.END)
@@ -79,8 +79,7 @@ def exp_ui( root, parent, bot ):
     parent.grid_rowconfigure(2, weight=0)
     parent.grid_rowconfigure(3, weight=2)
 
-TK_FILL="n"
-def chat_ui( root, parent, bot ):
+def chat_ui( root, parent, bot:BotCore ):
     # キューの作成
     update_queue = queue.Queue()
 
@@ -162,15 +161,19 @@ def chat_ui( root, parent, bot ):
     # GUIを更新するためにメインスレッドで定期的に呼び出される関数
     def check_queue():
         try:
-            while not update_queue.empty():
-                func = update_queue.get_nowait()
-                func()  # ラムダ式や関数を実行する
-            # 100ms後に再度この関数を呼び出す
+            try:
+                while not update_queue.empty():
+                    func = update_queue.get_nowait()
+                    func()  # ラムダ式や関数を実行する
+            except:
+                traceback.print_exc()
+            bot.timer_task()
         finally:
+            # 100ms後に再度この関数を呼び出す
             root.after(100, lambda: check_queue() )
     check_queue()
 
-def debug_ui( bot ):
+def debug_ui( bot: BotCore ):
 
     # GUIを作成する
     root = tk.Tk()

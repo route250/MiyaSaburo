@@ -75,6 +75,9 @@ class BotCore:
         self.read_timeout:float = 60.0
         self._load_api_key: bool = False
         self.log_callback = None
+        #
+        self._location:str = None
+        self._update_location:float = 0
 
     def notify_log(self, message:str ):
         try:
@@ -258,7 +261,23 @@ class BotCore:
 
         self.notify_log(content)
         return content
-    
+
+    def timer_task(self) -> None:
+        pass
+
+    def get_location(self) -> str:
+        try:
+            now_dt:float = time.time()
+            if self._location is None or (now_dt-self._update_location)>300.0:
+                data:dict = BotUtils.get_location()
+                if data is not None:
+                    location = BotUtils.join_str( data.get('city'), BotUtils.join_str( data.get('region'), data.get('country'), sep=" "), sep=" ")
+                    if not BotUtils.is_empty(location):
+                        self._location = location
+        except:
+            pass
+        return self._location
+
 class TalkEngine:
     VoiceList = [
         ( "gTTS[ja_JP]", -1, 'ja_JP' ),
@@ -624,18 +643,21 @@ class BotUtils:
         return tst
 
     @staticmethod
-    def get_location():
+    def get_location() -> dict:
         try:
             geo_request_url = 'https://get.geojs.io/v1/ip/geo.json'
             data = requests.get(geo_request_url).json()
-            print(data)
-            print(data['latitude'])
-            print(data['longitude'])
-            print(data['country'])
-            print(data['region'])
-            print(data['city'])
+            # {'organization': 'AS17511 OPTAGE Inc.', 'organization_name': 'OPTAGE Inc.', 'area_code': '0', 'ip': '121.86.210.40', 'country_code': 'JP', 'country_code3': 'JPN', 'continent_code': 'AS', 'asn': 17511, 'region': 'Ōsaka', 'city': 'Otemae', 'longitude': '135.5236', 'accuracy': 10, 'latitude': '34.6837', 'timezone': 'Asia/Tokyo', 'country': 'Japan'}
+            # print(data['latitude']) # 34.6837
+            # print(data['longitude']) # 135.5236
+            # print(data['country']) # Japan
+            # print(data['region']) # Osaka
+            # print(data['city'])   # Otemae
+            # print(data['ip'])     # 121.86.210.40
+            return data
         except Exception as ex:
             pass
+        return None
 
     @staticmethod
     def get_queue( queue:queue.Queue ):
@@ -652,6 +674,23 @@ class BotUtils:
         if isinstance(obj,dict):
             return json.dumps( obj, ensure_ascii=False, indent=4 )
         return str(obj)
+
+    @staticmethod
+    def join_str( a:str=None, b:str=None, *,sep:str="\n") -> str:
+        ret:str = ""
+        if BotUtils.is_empty(a):
+            if BotUtils.is_empty(b):
+                return ""
+            else:
+                return str(b)
+        else:
+            if BotUtils.is_empty(b):
+                return str(a)
+            else:
+                return str(a) + str(sep) + str(b)
+    @staticmethod
+    def is_empty( value ) -> bool:
+        return value is None or len(str(value).strip())<=0
 
 def test():
     BotUtils.eq(

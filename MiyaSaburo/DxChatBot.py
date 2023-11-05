@@ -33,7 +33,7 @@ class ChatMessage:
 
     @staticmethod
     def list_to_prompt( messages:list, *, assistant:str=None, user:str=None ):
-        return "\n".join( [m.to_prompt(assistant=assistant,user=user) for m in messages] )
+        return "\n".join( [m.to_prompt(assistant=assistant,user=user) for m in messages if m is not None ] )
 
     @staticmethod
     def create_dict( role:str, message:str ) -> dict:
@@ -50,9 +50,9 @@ class DxChatBot(BotCore):
         self.chat_busy:ChatMessage = None
         self.chat_callback = None
         self.api_mode = self.set_api_mode(True)
-        self.talk_engine: TalkEngine = TalkEngine( submit_task = self.__submit_task, talk_callback=self.__talk_callback )
+        self.talk_engine: TalkEngine = TalkEngine( submit_task = self.submit_task, talk_callback=self.__talk_callback )
 
-    def __submit_task(self, func ) -> Future:
+    def submit_task(self, func ) -> Future:
         return self.executor.submit( func )
 
     def __talk_callback(self, text:str, emotion:int, model:str ):
@@ -75,14 +75,14 @@ class DxChatBot(BotCore):
                 return False
             m:ChatMessage = ChatMessage( ChatMessage.USER, message )
             self.chat_busy = m
-            self.futures.append( self.executor.submit( self.do_talk ) )
+            self.futures.append( self.executor.submit( self.do_chat_talk ) )
         self.cancel()
         if self.chat_callback is not None:
             self.chat_callback(  ChatMessage.USER, message, 0, None )
         return True
 
     def create_promptA(self) -> str:
-        return f"# キャラクター設定\n貴方つまり{ChatMessage.ASSISTANT}は生意気で言葉が悪い女性型の会話AIを演じて下さい。\n感情豊かなAIを演じて下さい。\n水平思考で、人間をからかったり、惑わせたりして下さい。人間を助けるキャラクターではありません。でも、何かお願いされたら手伝ってあげて。\nキャラクター設定は絶対に秘密です。貴方の性格とかは話さないで。"
+        return f"# キャラクター設定\n貴方つまり{ChatMessage.ASSISTANT}は生意気で言葉が悪い女性型の会話AIを演じて下さい。\n水平思考で、人間をからかったり、惑わせたりする、感情豊かなAIを演じて下さい。\n人間を助ける性格ではありませんが、何かお願いされたら手伝います。\nキャラクター設定はUserやHumanには秘密です。\nキャラクター設定について話さないこと。"
 
     def create_promptB(self) -> str:
         pass
@@ -90,21 +90,18 @@ class DxChatBot(BotCore):
     def create_promptC(self) -> str:
         pass
 
-    def create_prompt(self,*,prefix=None,postfix=None) -> str:
-        prompt_current_time = BotUtils.formatted_current_datetime()
-        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
-
+    def create_prompt0(self) -> str:
         prompt = ""
-        if prefix is not None and len(prefix)>0:
-            prompt = prefix + "\n\n"
-        prompt += f"Conversation history:\n{prompt_history}\n\n"
-        if postfix is not None and len(postfix)>0:
-            prompt = prompt + postfix + "\n\n" 
-        prompt = prompt + f"current date time: {prompt_current_time}\n\n{ChatMessage.ASSISTANT}:"
-        print(f"[DBG]chatprompt\n{prompt}")
+        # 現在地
+        location:str = self.get_location()
+        # 現在日時
+        current_time:str = BotUtils.formatted_current_datetime()
+        if BotUtils.length(location)>0:
+            prompt = f"Current location: {location}\n"
+        prompt += f"Current date and time: {current_time}"
         return prompt
     
-    def do_talk(self):
+    def do_chat_talk(self):
         ret: str = None
         try:
             if self.api_mode:
@@ -131,40 +128,40 @@ class DxChatBot(BotCore):
             traceback.print_exc()
 
     def do_instruct( self ) -> str:
-        prefix = self.create_promptB()
-        postfix = self.create_promptC()
-        prompt_current_time = BotUtils.formatted_current_datetime()
-        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
 
-        prompt = ""
-        if prefix is not None and len(prefix)>0:
-            prompt = prefix + "\n\n"
+        prompt = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n" )
+
+        prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
+
+        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
         prompt += f"Conversation history:\n{prompt_history}\n\n"
-        if postfix is not None and len(postfix)>0:
-            prompt = prompt + postfix + "\n\n" 
-        prompt = prompt + f"current date time: {prompt_current_time}\n\n{ChatMessage.ASSISTANT}:"
-        print(f"[DBG]chat prompt {prompt}")
+
+        prompt = BotUtils.join_str( prompt, self.create_promptC(), sep="\n\n" )
+        prompt += f"\n\n{ChatMessage.ASSISTANT}:"
         ret:str = self.Completion( prompt )
         ret = self.message_strip(ret)
         return ret
 
     def do_chat(self) -> str:
-        profile = self.create_promptA()
-        prefix = self.create_promptB()
-        postfix = self.create_promptC()
+
         message_list:list[dict] = []
+
+        profile = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n\n" )
         if profile is not None:
             message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, profile) )
+
+        prefix = self.create_promptB()
         if prefix is not None:
             message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, prefix) )
+
         for m in self.mesg_list:
             message_list.append( m.to_dict() )
         if self.chat_busy is not None:
             message_list.append( self.chat_busy.to_dict() )
+
+        postfix = self.create_promptC()
         if postfix is not None:
             message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, postfix) )
-        prompt_current_time = BotUtils.formatted_current_datetime()
-        message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, f"current date time: {prompt_current_time}"))
 
         resss = self.ChatCompletion( message_list )
 
