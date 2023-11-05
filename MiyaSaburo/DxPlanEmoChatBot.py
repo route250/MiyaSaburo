@@ -18,8 +18,8 @@ class DxPlanEmoChatBot(DxEmoChatBot):
     def __init__(self):
         super().__init__()
         self.plan_data:dict = {}
-        for key in DxPlanEmoChatBot.PLAN_FMT.keys():
-            self.plan_data[key] = 'no plan'
+        # for key in DxPlanEmoChatBot.PLAN_FMT.keys():
+        #     self.plan_data[key] = 'no plan'
 
     #Override
     def eval_plan(self) -> str:
@@ -29,21 +29,29 @@ class DxPlanEmoChatBot(DxEmoChatBot):
         if BotUtils.length(profile)>0:
             prompt = profile + "\n\n"
 
-        prompt_current_plan = BotUtils.to_prompt( self.plan_data )
+        prompt_current_plan = BotUtils.to_prompt( self.plan_data ) if len(self.plan_data)>0 else ""
         if BotUtils.length(prompt_current_plan)>0:
             prompt += f"Your current plan:\n{prompt_current_plan}\n\n"
 
-        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
+        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy], assistant='You', user="User")
         if BotUtils.length(prompt_history)>0:
-            prompt += f"Conversation history:\n{prompt_history}\n\n"
+            if prompt_history.find("You:")>0:
+                if prompt_history.find("User:")>0:
+                    prompt += f"Conversation history:\n{prompt_history}\n\n"
+                else:
+                    prompt += f"What you said:\n{prompt_history}\n\n"
+            else:
+                if prompt_history.find("User:")>0:
+                    prompt += f"What users said:\n{prompt_history}\n\n"
 
         prompt_fmt = BotUtils.to_format( DxPlanEmoChatBot.PLAN_FMT )
-        prompt += f"Please update your (i.e. {ChatMessage.ASSISTANT}'s) plan in the following format:\n{prompt_fmt}"
+        if BotUtils.length(prompt_current_plan)>0:
+            prompt += f"As a conversational AI, update your own plans according to your profile above.\n{prompt_fmt}"
+        else:
+            prompt += f"As a conversational AI, create your own plans according to your profile above.\n{prompt_fmt}"
 
         print( f"[DBG]plan prompt\n{prompt}" )
-        self.notify_log(prompt)
         res:str = self.Completion( prompt )
-        self.notify_log(res)
         print( f"[DBG]plan response\n{res}")
         new_plan:dict = BotUtils.parse_response( DxPlanEmoChatBot.PLAN_FMT, res )
         if new_plan is not None:

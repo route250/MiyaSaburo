@@ -20,15 +20,20 @@ class ChatMessage:
         self.message=message
         self.tm = tm if tm is not None and tm>0 else time.time()
 
-    def to_prompt(self):
-        return f"{self.role}: {self.message}"
+    def to_prompt(self, *, assistant:str=None, user:str=None):
+        r:str = self.role
+        if r == ChatMessage.ASSISTANT and assistant is not None:
+            r=assistant
+        if r == ChatMessage.USER and user is not None:
+            r=user
+        return f"{r}: {self.message}"
 
     def to_dict(self):
         return ChatMessage.create_dict( self.role, self.message )
 
     @staticmethod
-    def list_to_prompt( messages:list ):
-        return "\n".join( [m.to_prompt() for m in messages] )
+    def list_to_prompt( messages:list, *, assistant:str=None, user:str=None ):
+        return "\n".join( [m.to_prompt(assistant=assistant,user=user) for m in messages] )
 
     @staticmethod
     def create_dict( role:str, message:str ) -> dict:
@@ -44,16 +49,8 @@ class DxChatBot(BotCore):
         self.mesg_list:list[ChatMessage]=[]
         self.chat_busy:ChatMessage = None
         self.chat_callback = None
-        self.log_callback = None
         self.api_mode = self.set_api_mode(True)
         self.talk_engine: TalkEngine = TalkEngine( submit_task = self.__submit_task, talk_callback=self.__talk_callback )
-
-    def notify_log(self, message:str ):
-        try:
-            if self.log_callback is not None:
-                self.log_callback(message)
-        except:
-            traceback.print_exc()
 
     def __submit_task(self, func ) -> Future:
         return self.executor.submit( func )
@@ -169,9 +166,7 @@ class DxChatBot(BotCore):
         prompt_current_time = BotUtils.formatted_current_datetime()
         message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, f"current date time: {prompt_current_time}"))
 
-        self.notify_log( message_list )
         resss = self.ChatCompletion( message_list )
-        self.notify_log(resss)
 
         return resss
 

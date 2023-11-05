@@ -74,6 +74,14 @@ class BotCore:
         self.connect_timeout:float = 10.0
         self.read_timeout:float = 60.0
         self._load_api_key: bool = False
+        self.log_callback = None
+
+    def notify_log(self, message:str ):
+        try:
+            if self.log_callback is not None:
+                self.log_callback(message)
+        except:
+            traceback.print_exc()
 
     def update_info( self, data:dict ) -> None:
         BotUtils.update_dict( data, self.info_data )
@@ -121,9 +129,9 @@ class BotCore:
         return count
 
     def Completion(self, prompt, *, max_tokens=None, temperature=0 ) -> str:
+        content:str = None
         try:
-            #print( f"openai.api_key={openai.api_key}")
-            #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
+            self.notify_log(prompt)
             if openai.api_key is None:
                 openai.api_key=os.getenv('OPENAI_API_KEY')
             in_count = BotCore.token_count( prompt )
@@ -169,7 +177,7 @@ class BotCore:
                 print( f"Error:invalid response from openai\n{response}")
                 return None
             content = response.choices[0].text.strip()
-            if length(content)==0:
+            if content is None:
                 print( f"Error:invalid response from openai\n{response}")
                 return None
             return content
@@ -185,10 +193,15 @@ class BotCore:
         except Exception as ex:
             traceback.print_exc()
             return None
+        finally:
+            self.notify_log(content)
+
 
     def ChatCompletion( self, mesg_list:list[dict], temperature=0, stop=["\n", "。", "？", "！"] ):
+        content = None
         try:
             api_logger.debug( "request" + "\n" + json.dumps( mesg_list, indent=2, ensure_ascii=False) )
+            self.notify_log( mesg_list )
 
             #print( f"openai.api_key={openai.api_key}")
             #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
@@ -227,26 +240,23 @@ class BotCore:
 
             if response is None or response.choices is None or len(response.choices)==0:
                 logger.error( f"invalid response from openai\n{response}")
-                return None
+            else:
+                content = response.choices[0]["message"]["content"].strip()
 
-            content = response.choices[0]["message"]["content"].strip()
         except openai.error.AuthenticationError as ex:
             api_logger.error( f"{ex}" )
             logger.error( f"ChatCompletion {ex}" )
-            return None
         except openai.error.InvalidRequestError as ex:
             api_logger.error( f"{ex}" )
             logger.error( f"ChatCompletion {ex}" )
-            return None
         except openai.error.ServiceUnavailableError as ex:
             api_logger.error( f"{ex}" )
             logger.error( f"ChatCompletion {ex}" )
-            return None
         except Exception as ex:
             api_logger.exception( f"%s", ex )
             logger.exception( f"%s", ex )
-            return None
 
+        self.notify_log(content)
         return content
     
 class TalkEngine:
@@ -358,9 +368,11 @@ class TalkEngine:
             model:str = TalkEngine.id_to_name(self.speaker)
             return res.content, model
         except requests.exceptions.ConnectTimeout as ex:
-            print( f"[VOICEVOX] timeout")
+            print( f"[VOICEVOX] {type(ex)} {ex}")
+        except requests.exceptions.ConnectionError as ex:
+            print( f"[VOICEVOX] {type(ex)} {ex}")
         except Exception as ex:
-            print( f"[VOICEVOX] {ex}")
+            print( f"[VOICEVOX] {type(ex)} {ex}")
             traceback.print_exc()
         self._disable_voicevox = time.time()
         return None,None
@@ -475,7 +487,9 @@ class BotUtils:
     @staticmethod
     def parse_response( inp:dict, text:str, start:int=0, end:int=-1, fill:bool=False ):
         # 位置調整
-        text_len=len(text)
+        if text is None:
+            return None
+        text_len=BotUtils.length(text)
         if end<0 or text_len<end:
             end=text_len
         # keyの位置を検索
