@@ -580,6 +580,13 @@ class BotUtils:
             pass
         return None
 
+    @staticmethod
+    def to_str( obj ) -> str:
+        if isinstance(obj,list):
+            return "\n".join( [BotUtils.to_str(s) for s in obj] )
+        if isinstance(obj,dict):
+            return json.dumps( obj, ensure_ascii=False, indent=4 )
+        return str(obj)
 
 def test():
     BotUtils.eq(
