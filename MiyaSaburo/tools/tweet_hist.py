@@ -3,7 +3,7 @@ import os, shutil
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import openai
-from openai.embeddings_utils import cosine_similarity
+from DxBotUtils import BotUtils
 
 class CustomJsonEncorder(json.JSONEncoder):
 
@@ -59,7 +59,7 @@ class TweetHist:
 
     def get_embedding(self, content: str, limit: float = 0.8) -> list[float]:
         """ contentと似た記事がなければ記録してFalseを返す。似た記事があればTrueを返す"""
-        embedding = to_embedding( content )
+        embedding = BotUtils.to_embedding( content )
         if leng(embedding) != 1:
             return None
         embedding=embedding[0]
@@ -70,7 +70,7 @@ class TweetHist:
         for article in self.hist['article']:
             embB = article.get('embedding',None)
             if embB is not None:
-                sim = cosine_similarity( embedding, embB )
+                sim = BotUtils.cosine_similarity( embedding, embB )
                 if sim>=limit:
                     return None
         return embedding

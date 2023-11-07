@@ -16,9 +16,14 @@ class DxPlanEmoChatBot(DxEmoChatBot):
         '計画': '目標に従って行動計画をリスト形式で',
     }
     TASK_FMT = {
-        'title': 'identify to task',
-        'what_to_do': 'What this task does',
-        'goal': 'Goals to be achieved, results to be achieved'
+        'タイトル': '実行するタスクのタイトル',
+        '作業内容': 'タスクで処理する内容、調べる内容、考える内容など',
+        '達成条件': 'タスクの完了を判定する条件など'
+    }
+    TALK_FMT = {
+        'タイトル': '会話のタイトル',
+        'トピック': '何について会話するか？',
+        '達成条件': '会話の目的、完了を判定する条件など'
     }
     def __init__(self):
         super().__init__()
@@ -94,8 +99,14 @@ class DxPlanEmoChatBot(DxEmoChatBot):
 
             prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
 
-            prompt += f"\n\nBased on the above plan, if you have any tasks to perform, write them in the format below. If not, nothing will be returned.\n"
-            prompt += BotUtils.to_format( DxPlanEmoChatBot.TASK_FMT )
+            prompt += f"\n\n1) 貴方の行動を、NothingToDo, StartNewTask, StartNewTalk から選択して下さい。\n貴方の行動:"
+
+            prompt += f"\n\n2) NothinToDoを選択した場合は、ここで終了です。"
+            prompt += f"\n\n3) StartNewTaskを選択した場合は、以下のフォーマットで内容を記述して下さい。"
+            prompt += "\n" +BotUtils.to_format( DxPlanEmoChatBot.TASK_FMT )
+            prompt += f"\n\n4) StartNewTalkを選択した場合は、以下のフォーマットで内容を記述して下さい。"
+            prompt += "\n" +BotUtils.to_format( DxPlanEmoChatBot.TALK_FMT )
+            prompt += f"\n\n貴方の行動:"
             ret:str = self.Completion( prompt )
             print(ret)
         except Exception as ex:

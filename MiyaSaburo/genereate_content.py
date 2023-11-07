@@ -1,7 +1,6 @@
 import sys,os,re,time,json
 import traceback
 import openai, tiktoken
-from openai.embeddings_utils import cosine_similarity
 import tiktoken
 from tiktoken.core import Encoding
 import requests
@@ -17,6 +16,7 @@ from libs.utils import Utils
 from tools.tweet_hist import TweetHist
 from twitter_text import parse_tweet
 from lxml.html import  HtmlElement, HtmlComment, HtmlMixin, HtmlEntity
+from DxBotUtils import BotCore
 
 if __name__ == "__main__":
     pre = os.getenv('OPENAI_API_KEY')
@@ -46,6 +46,8 @@ class TwConfig:
         self.client_secret = os.getenv('CLIENT_SECRET')
 
 def neko_news():
+    bot:BotCore = BotCore()
+
     HIST_JSON:str = "tweet_history.json"
 
     config = TwConfig()
@@ -86,7 +88,7 @@ def neko_news():
     for w in sub_query:
         trans += f"\n|{w}|||"
 
-    translate_result: str = Completion(trans, max_tokens=2000)
+    translate_result: str = bot.Completion(trans, max_tokens=2000) #Completion(trans, max_tokens=2000)
     if translate_result is None or len(translate_result)<20:
         print( f"ERROR: 評価結果が想定外\n{translate_result}")
         return
@@ -187,7 +189,6 @@ def neko_news():
         "コンパクトで興味を引くよう、強い、鮮やかな言葉を使用して感動的なインパクトを作り出して下さい。",
     ] )
 
-
     evaluate_prompt = "\n".join([
         "次に、以下の5つの指標を20点満点で評価してくださいにゃ。",
         "1) 話題性：現在の流行やニュースなど、人々が興味を持つ話題に関連しているかにゃ？(0から20)",
@@ -205,7 +206,6 @@ def neko_news():
 
     buzz_prompt = "\n\n# バズワード: 次のワードが現在のトレンドバズワードにゃ。\n{}"
     update_prompt = "\n\n上記を踏まえて、野良猫っぽい皮肉やジョークを含めたツイートを{}で{}文字以内で生成するにゃ。絵文字は無しにゃ\n# ツイート:"
-
 
     exclude_site = {
         "www.youtube.com": 1,
@@ -379,7 +379,7 @@ def neko_news():
         post_lang = -1
         while post_lang<0 and detect_count<3:
             detect_count += 1
-            detect_result: str = Completion(detect_prompt,max_tokens=None)
+            detect_result: str = bot.Completion(detect_prompt,max_tokens=None) #Completion(detect_prompt,max_tokens=None)
             if detect_result is None or len(detect_result)<20:
                 print( f"ERROR: 評価結果が想定外\n{detect_result}")
                 break
@@ -499,7 +499,7 @@ def neko_news():
                     {"role": "assistant", "content": base_article },
                     {"role": "user", "content": evaluate_prompt }
                 ]
-                evaluate_response = ChatCompletion(evaluate_msgs)
+                evaluate_response = bot.ChatCompletion(evaluate_msgs) # ChatCompletion(evaluate_msgs)
                 if evaluate_response is None or len(evaluate_response)<20:
                     print( f"Error: result \n{evaluate_response}")
                     break

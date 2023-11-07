@@ -1,4 +1,5 @@
 import sys,os,re,time,json,re,copy
+import numpy as np
 import requests
 from requests.adapters import HTTPAdapter
 import traceback
@@ -6,7 +7,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 import datetime
 from zoneinfo import ZoneInfo
+import httpx
 import openai
+from openai import OpenAI
+from openai.types import Completion, CompletionChoice, CompletionUsage
+from openai.types import CreateEmbeddingResponse, Embedding
 import tiktoken
 from tiktoken.core import Encoding
 from libs.utils import Utils
@@ -59,6 +64,18 @@ def length( value ):
         return 0
     else:
         return len(value)
+
+_openai_client: OpenAI = None
+def get_client():
+    global _openai_client
+    if _openai_client is None:
+        if openai.api_key is None:
+            openai.api_key=os.getenv('OPENAI_API_KEY')
+            if openai.api_key is None:
+                BotUtils.load_api_keys()
+                openai.api_key=os.getenv('OPENAI_API_KEY')
+        _openai_client = OpenAI( timeout=httpx.Timeout(180.0, connect=5.0), max_retries=0 )
+    return _openai_client
 
 class BotCore:
 
@@ -135,40 +152,38 @@ class BotCore:
         content:str = None
         try:
             self.notify_log(prompt)
-            if openai.api_key is None:
-                openai.api_key=os.getenv('OPENAI_API_KEY')
             in_count = BotCore.token_count( prompt )
             if max_tokens is None:
                 max_tokens = 4096
             u = max_tokens - in_count - 50
+            client:OpenAI = get_client()
             for retry in range(2,-1,-1):
                 try:
-                    response = openai.Completion.create(
+                    response: Completion = client.completions.create(
                             model="gpt-3.5-turbo-instruct",
                             temperature = temperature, max_tokens=u,
-                            prompt=prompt,
-                            request_timeout=(self.connect_timeout,self.read_timeout)
-                        )
+                            prompt=prompt
+                            )
                     break
-                except openai.error.Timeout as ex:
+                except openai.APITimeoutError as ex:
                     if retry>0:
                         print( f"{ex}" )
                         time.sleep(5)
                     else:
                         raise ex
-                except openai.error.ServiceUnavailableError as ex:
-                    if retry>0:
-                        print( f"{ex}" )
-                        time.sleep(5)
-                    else:
-                        raise ex
+                # except openai.error.ServiceUnavailableError as ex:
+                #     if retry>0:
+                #         print( f"{ex}" )
+                #         time.sleep(5)
+                #     else:
+                #         raise ex
                 except ConnectionRefusedError as ex:
                     if retry>0:
                         print( f"{ex}" )
                         time.sleep(5)
                     else:
                         raise ex
-                except openai.error.AuthenticationError as ex:
+                except openai.AuthenticationError as ex:
                     if not self._load_api_key:
                         self._load_api_key=True
                         BotUtils.load_api_keys()
@@ -184,15 +199,15 @@ class BotCore:
                 print( f"Error:invalid response from openai\n{response}")
                 return None
             return content
-        except openai.error.AuthenticationError as ex:
+        except openai.AuthenticationError as ex:
             print( f"{ex}" )
             return None
-        except openai.error.InvalidRequestError as ex:
-            print( f"{ex}" )
-            return None
-        except openai.error.ServiceUnavailableError as ex:
-            print( f"{ex}" )
-            return None
+        # except openai.InvalidRequestError as ex:
+        #     print( f"{ex}" )
+        #     return None
+        # except openai.ServiceUnavailableError as ex:
+        #     print( f"{ex}" )
+        #     return None
         except Exception as ex:
             traceback.print_exc()
             return None
@@ -206,55 +221,53 @@ class BotCore:
             api_logger.debug( "request" + "\n" + json.dumps( mesg_list, indent=2, ensure_ascii=False) )
             self.notify_log( mesg_list )
 
-            #print( f"openai.api_key={openai.api_key}")
-            #print( f"OPENAI_API_KEY={os.getenv('OPENAI_API_KEY')}")
-            if openai.api_key is None:
-                openai.api_key=os.getenv('OPENAI_API_KEY')
+            client:OpenAI = get_client()
             for retry in range(2,-1,-1):
                 try:
-                    response = openai.ChatCompletion.create(
+                    response = client.chat.completions.create(
                             model="gpt-3.5-turbo",
                             temperature = temperature,
                             messages=mesg_list,
-                            request_timeout=(self.connect_timeout,self.read_timeout)
                         )
-                    api_logger.debug( "response" + "\n" + json.dumps( response, indent=2, ensure_ascii=False) )
+#                            request_timeout=(self.connect_timeout,self.read_timeout)
+                    api_logger.debug( "response" + "\n" + response.model_dump_json(indent=2) )
                     break
-                except openai.error.Timeout as ex:
+                except openai.APITimeoutError as ex:
                     api_logger.error( f"{ex}" )
                     if retry>0:
                         logger.error( f"ChatCompletion {ex}" )
                         time.sleep(5)
                     else:
                         raise ex
-                except openai.error.ServiceUnavailableError as ex:
-                    api_logger.error( f"{ex}" )
-                    if retry>0:
-                        logger.error( f"ChatCompletion {ex}" )
-                        time.sleep(5)
-                    else:
-                        raise ex
-                except openai.error.AuthenticationError as ex:
+                # except openai.error.ServiceUnavailableError as ex:
+                #     api_logger.error( f"{ex}" )
+                #     if retry>0:
+                #         logger.error( f"ChatCompletion {ex}" )
+                #         time.sleep(5)
+                #     else:
+                #         raise ex
+                except openai.AuthenticationError as ex:
                     if not self._load_api_key:
                         self._load_api_key=True
                         BotUtils.load_api_keys()
                     else:
                         raise ex
 
+            self.token_usage( response )
             if response is None or response.choices is None or len(response.choices)==0:
                 logger.error( f"invalid response from openai\n{response}")
             else:
-                content = response.choices[0]["message"]["content"].strip()
+                content = response.choices[0].message.content.strip()
 
-        except openai.error.AuthenticationError as ex:
+        except openai.AuthenticationError as ex:
             api_logger.error( f"{ex}" )
             logger.error( f"ChatCompletion {ex}" )
-        except openai.error.InvalidRequestError as ex:
-            api_logger.error( f"{ex}" )
-            logger.error( f"ChatCompletion {ex}" )
-        except openai.error.ServiceUnavailableError as ex:
-            api_logger.error( f"{ex}" )
-            logger.error( f"ChatCompletion {ex}" )
+        # except openai.InvalidRequestError as ex:
+        #     api_logger.error( f"{ex}" )
+        #     logger.error( f"ChatCompletion {ex}" )
+        # except openai.error.ServiceUnavailableError as ex:
+        #     api_logger.error( f"{ex}" )
+        #     logger.error( f"ChatCompletion {ex}" )
         except Exception as ex:
             api_logger.exception( f"%s", ex )
             logger.exception( f"%s", ex )
@@ -302,6 +315,12 @@ class TalkEngine:
         ( "VOICEVOX:白上虎太郎 [おこ]", 34, 'ja_JP' ),
         ( "VOICEVOX:白上虎太郎 [びえーん]", 36, 'ja_JP' ),
         ( "VOICEVOX:もち子(cv 明日葉よもぎ)[ノーマル]", 20, 'ja_JP' ),
+        ( "OpenAI:alloy[ja_JP]", 1001, 'ja_JP' ),
+        ( "OpenAI:echo[ja_JP]", 1002, 'ja_JP' ),
+        ( "OpenAI:fable[ja_JP]", 1003, 'ja_JP' ),
+        ( "OpenAI:onyx[ja_JP]", 1004, 'ja_JP' ),
+        ( "OpenAI:nova[ja_JP]", 1005, 'ja_JP' ),
+        ( "OpenAI:shimmer[ja_JP]", 1006, 'ja_JP' ),
     ]
 
     @staticmethod
@@ -315,7 +334,7 @@ class TalkEngine:
         self._talk_id: int = 0
         self.wave_queue:queue.Queue = queue.Queue()
         self.play_queue:queue.Queue = queue.Queue()
-        self.speaker = 3
+        self.speaker = 1005 #3
         self.submit_call = submit_task
         self.start_call = talk_callback
         self.pygame_init:bool = False
@@ -415,10 +434,33 @@ class TalkEngine:
         self._disable_gtts = time.time()
         return None,None
 
+    def _text_to_audio_by_openai(self, text: str, emotion:int = 0, lang='ja') -> bytes:
+        if self._disable_gtts>0 and (time.time()-self._disable_gtts)<180.0:
+            return None,None
+        try:
+            self._disable_gtts = 0
+            client:OpenAI = get_client()
+            response:openai._base_client.HttpxBinaryResponseContent = client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",
+                response_format="mp3",
+                input=text
+            )
+            return response.content,"OpenAI"
+        except requests.exceptions.ConnectTimeout as ex:
+            print( f"[gTTS] timeout")
+        except Exception as ex:
+            print( f"[gTTS] {ex}")
+            traceback.print_exc()
+        self._disable_gtts = time.time()
+        return None,None
+
     def _text_to_audio( self, text: str, emotion:int = 0, lang='ja' ) -> bytes:
         wave: bytes = None
         model:str = None
-        if self.speaker>=0 and lang=='ja':
+        if self.speaker>=1000:
+            wave, model = self._text_to_audio_by_openai( text, emotion, lang=lang )
+        elif self.speaker>=0 and lang=='ja':
             wave, model = self._text_to_audio_by_voicevox( text, emotion, lang=lang )
         if wave is None:
             wave, model = self._text_to_audio_by_gtts( text, emotion, lang=lang )
@@ -658,6 +700,16 @@ class BotUtils:
         except Exception as ex:
             pass
         return None
+
+    @staticmethod
+    def to_embedding( input ):
+        client:OpenAI = get_client()
+        res:CreateEmbeddingResponse = client.embeddings.create(input=input, model="text-embedding-ada-002")
+        return [data.get('embedding',None) for data in res.get('data',[])]
+
+    @staticmethod
+    def cosine_similarity(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
     @staticmethod
     def get_queue( queue:queue.Queue ):
