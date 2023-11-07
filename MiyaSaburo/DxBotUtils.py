@@ -141,18 +141,11 @@ class BotCore:
             y = self.total_doll * 150
             print( f"[COST] total {y:.1f}円 ${self.total_doll:.4f}({self.total_tokens})  in ${self.in_doll:.4f}({self.prompt_tokens})  out  ${self.out_doll:.4f}({self.completion_tokens})")
 
-    @staticmethod
-    def token_count( input: str ) -> int:
-        encoding: Encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        tokens = encoding.encode(input)
-        count = len(tokens)
-        return count
-
     def Completion(self, prompt, *, max_tokens=None, temperature=0 ) -> str:
         content:str = None
         try:
             self.notify_log(prompt)
-            in_count = BotCore.token_count( prompt )
+            in_count = BotUtils.token_count( prompt )
             if max_tokens is None:
                 max_tokens = 4096
             u = max_tokens - in_count - 50
@@ -165,19 +158,7 @@ class BotCore:
                             prompt=prompt
                             )
                     break
-                except openai.APITimeoutError as ex:
-                    if retry>0:
-                        print( f"{ex}" )
-                        time.sleep(5)
-                    else:
-                        raise ex
-                # except openai.error.ServiceUnavailableError as ex:
-                #     if retry>0:
-                #         print( f"{ex}" )
-                #         time.sleep(5)
-                #     else:
-                #         raise ex
-                except ConnectionRefusedError as ex:
+                except (openai.APITimeoutError,openai.RateLimitError,openai.InternalServerError,openai.APIConnectionError,ConnectionRefusedError) as ex:
                     if retry>0:
                         print( f"{ex}" )
                         time.sleep(5)
@@ -200,14 +181,11 @@ class BotCore:
                 return None
             return content
         except openai.AuthenticationError as ex:
-            print( f"{ex}" )
-            return None
-        # except openai.InvalidRequestError as ex:
-        #     print( f"{ex}" )
-        #     return None
-        # except openai.ServiceUnavailableError as ex:
-        #     print( f"{ex}" )
-        #     return None
+            api_logger.error( f"{ex}" )
+            logger.error( f"ChatCompletion {ex}" )
+        except (openai.APITimeoutError,openai.RateLimitError,openai.InternalServerError,openai.APIConnectionError,ConnectionRefusedError) as ex:
+            api_logger.error( f"{ex}" )
+            logger.error( f"ChatCompletion {ex}" )
         except Exception as ex:
             traceback.print_exc()
             return None
@@ -232,20 +210,13 @@ class BotCore:
 #                            request_timeout=(self.connect_timeout,self.read_timeout)
                     api_logger.debug( "response" + "\n" + response.model_dump_json(indent=2) )
                     break
-                except openai.APITimeoutError as ex:
+                except (openai.APITimeoutError,openai.RateLimitError,openai.InternalServerError,openai.APIConnectionError,ConnectionRefusedError) as ex:
                     api_logger.error( f"{ex}" )
                     if retry>0:
                         logger.error( f"ChatCompletion {ex}" )
                         time.sleep(5)
                     else:
                         raise ex
-                # except openai.error.ServiceUnavailableError as ex:
-                #     api_logger.error( f"{ex}" )
-                #     if retry>0:
-                #         logger.error( f"ChatCompletion {ex}" )
-                #         time.sleep(5)
-                #     else:
-                #         raise ex
                 except openai.AuthenticationError as ex:
                     if not self._load_api_key:
                         self._load_api_key=True
@@ -262,12 +233,9 @@ class BotCore:
         except openai.AuthenticationError as ex:
             api_logger.error( f"{ex}" )
             logger.error( f"ChatCompletion {ex}" )
-        # except openai.InvalidRequestError as ex:
-        #     api_logger.error( f"{ex}" )
-        #     logger.error( f"ChatCompletion {ex}" )
-        # except openai.error.ServiceUnavailableError as ex:
-        #     api_logger.error( f"{ex}" )
-        #     logger.error( f"ChatCompletion {ex}" )
+        except (openai.APITimeoutError,openai.RateLimitError,openai.InternalServerError,openai.APIConnectionError,ConnectionRefusedError) as ex:
+            api_logger.error( f"{ex}" )
+            logger.error( f"ChatCompletion {ex}" )
         except Exception as ex:
             api_logger.exception( f"%s", ex )
             logger.exception( f"%s", ex )
@@ -702,10 +670,17 @@ class BotUtils:
         return None
 
     @staticmethod
+    def token_count( input: str ) -> int:
+        encoding: Encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        tokens = encoding.encode(input)
+        count = len(tokens)
+        return count
+
+    @staticmethod
     def to_embedding( input ):
         client:OpenAI = get_client()
         res:CreateEmbeddingResponse = client.embeddings.create(input=input, model="text-embedding-ada-002")
-        return [data.get('embedding',None) for data in res.get('data',[])]
+        return [data.embedding for data in res.data ]
 
     @staticmethod
     def cosine_similarity(a, b):
@@ -745,6 +720,7 @@ class BotUtils:
         return value is None or len(str(value).strip())<=0
 
 def test():
+    a = BotUtils.to_embedding( 'aaaa' )
     BotUtils.eq(
          { 'a': '1', 'b': '2'},
          { 'a': '1', 'b': '2'}
