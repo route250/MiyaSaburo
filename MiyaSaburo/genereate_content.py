@@ -86,25 +86,35 @@ def neko_news():
     trans += "\n|単語|日本語|英語|"
     trans += "\n|---|---|---|"
     for w in sub_query:
-        trans += f"\n|{w}|||"
+        trans += f"\n|{w}|...|...|"
 
-    translate_result: str = bot.Completion(trans, max_tokens=2000) #Completion(trans, max_tokens=2000)
-    if translate_result is None or len(translate_result)<20:
-        print( f"ERROR: 評価結果が想定外\n{translate_result}")
-        return
-    else:
-        translate_result = translate_result.replace('\n\n','\n')
-        print(translate_result)
-        print("--------")
-        # 文字列を行に分割し、不要な行を取り除く
-        lines = translate_result.strip().split("\n")
-        # 各行をパースしてデータを取得
-        data = [tuple(line.strip("|").split("|")) for line in lines]
-        # データを辞書形式に変換
-        buzz_list = [{"buzz_jp": jp, "buzz_en": en} for word,jp, en in data if not "日本語"==jp and not "---"==jp ]
-        for p in buzz_list:
-            print(p)
-        print("----")
+    n:int = 3
+    while n>0:
+        try:
+            translate_result: str = bot.Completion(trans, max_tokens=2000) #Completion(trans, max_tokens=2000)
+            if translate_result is None or len(translate_result)<20:
+                print( f"ERROR: 評価結果が想定外\n{translate_result}")
+                return
+            else:
+                translate_result = translate_result.replace('\n\n','\n')
+                print(translate_result)
+                print("--------")
+                # 文字列を行に分割し、不要な行を取り除く
+                lines = translate_result.strip().split("\n")
+                # 各行をパースしてデータを取得
+                data = [tuple(line.strip("|").split("|")) for line in lines]
+                # データを辞書形式に変換
+                buzz_list = [{"buzz_jp": jp, "buzz_en": en} for word,jp, en in data if not "日本語"==jp and not "---"==jp ]
+                for p in buzz_list:
+                    print(p)
+                print("----")
+                break
+        except Exception as ex:
+            if n>1:
+                print( f"ERROR {ex}")
+                n-=1
+                continue
+            raise ex
 
     main_list_jp = [ "猫 ニュース おもしろ", "猫 ニュース ほっこり", "猫 ニュース 可愛い" ]
     main_list_en = [ "Funny cat stories", "cute cat stories"]

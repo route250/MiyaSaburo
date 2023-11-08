@@ -68,7 +68,7 @@ class DxPlanEmoChatBot(DxEmoChatBot):
         if BotUtils.length(prompt_current_plan)>0:
             prompt += f"As a conversational AI, update your own plans according to your profile above.\n{prompt_fmt}"
         else:
-            prompt += f"You have just started up as an AI. Please perform the initial settings. Create your action plan based on the profile above.\n{prompt_fmt}"
+            prompt += f"You have just started up as an AI. Please perform the initial settings. Conversational AI creates an executable action plan based on the profile above.\n{prompt_fmt}"
 
         print( f"[DBG]plan prompt\n{prompt}" )
         res:str = self.Completion( prompt )
@@ -107,13 +107,53 @@ class DxPlanEmoChatBot(DxEmoChatBot):
             prompt += f"\n\n4) StartNewTalkを選択した場合は、以下のフォーマットで内容を記述して下さい。"
             prompt += "\n" +BotUtils.to_format( DxPlanEmoChatBot.TALK_FMT )
             prompt += f"\n\n貴方の行動:"
+            print( f"-------\n{prompt}\n------")
             ret:str = self.Completion( prompt )
             print(ret)
+            if ret is None or len(ret.strip())==0:
+                return
+            if ret.find("StartNewTalk")>0:
+                self._do_start_new_talk(ret)
+
         except Exception as ex:
             traceback.print_exc()
         finally:
             self._task_feture = None
 
+    def _do_start_new_talk(self,ret) -> None:
+        xx:bool = False
+        try:
+            while not xx:
+                with self.lock:
+                    if self.chat_busy is None:
+                        self.chat_busy = ""
+                        xx = True
+                print( f"[NewTalk] sleep 1")
+                time.sleep(1.0)
+
+            prompt = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n" )
+            prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
+            prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
+            prompt += f"Conversation history:\n{prompt_history}\n\n"
+            prompt = BotUtils.join_str( prompt, "会話タスクを開始します。")
+            prompt = BotUtils.join_str( prompt, ret )
+            prompt = BotUtils.join_str( prompt, "貴方の次のセリフ:", sep="\n\n")
+            print( f"-------\n{prompt}\n------")
+            ret:str = self.Completion( prompt )
+            print(ret)
+            with self.lock:
+                self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, ret ) )
+            emotion:int = 0
+            if self.talk_engine is not None:
+                self.talk_engine.add_talk( ret, emotion )
+            elif self.chat_callback is not None:
+                self.chat_callback( ChatMessage.ASSISTANT, ret, emotion )
+        except Exception as ex:
+            traceback.print_exc()
+        finally:
+            if xx:
+                with self.lock:
+                    self.chat_busy = None
 def test():
     bot: DxPlanEmoChatBot = DxPlanEmoChatBot()
     debug_ui(bot)
