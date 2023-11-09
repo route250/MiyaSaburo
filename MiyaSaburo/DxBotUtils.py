@@ -718,7 +718,21 @@ class BotUtils:
     @staticmethod
     def is_empty( value ) -> bool:
         return value is None or len(str(value).strip())<=0
-
+    @staticmethod
+    def strip_message( mesg:str ) -> str:
+        while True:
+            if mesg is None or len(mesg)==0:
+                return ""
+            mesg = mesg.strip()
+            cc = mesg[0]
+            if cc == "「" or cc == "(" or cc=="{" or cc=="[":
+                mesg = mesg[1:]
+                continue
+            cc = mesg[-1]
+            if cc == "「" or cc == "(" or cc=="{" or cc=="[":
+                mesg = mesg[:-2]
+                continue
+            return mesg
 def test():
     a = BotUtils.to_embedding( 'aaaa' )
     BotUtils.eq(

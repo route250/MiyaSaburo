@@ -112,7 +112,7 @@ class DxPlanEmoChatBot(DxEmoChatBot):
             print(ret)
             if ret is None or len(ret.strip())==0:
                 return
-            if ret.find("StartNewTalk")>0:
+            if ret.find("StartNewTalk")>=0:
                 self._do_start_new_talk(ret)
 
         except Exception as ex:
@@ -128,12 +128,13 @@ class DxPlanEmoChatBot(DxEmoChatBot):
                     if self.chat_busy is None:
                         self.chat_busy = ""
                         xx = True
+                        break
                 print( f"[NewTalk] sleep 1")
                 time.sleep(1.0)
 
             prompt = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n" )
             prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
-            prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
+            prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list )
             prompt += f"Conversation history:\n{prompt_history}\n\n"
             prompt = BotUtils.join_str( prompt, "会話タスクを開始します。")
             prompt = BotUtils.join_str( prompt, ret )
