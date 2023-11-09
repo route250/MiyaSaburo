@@ -286,9 +286,9 @@ class TalkEngine:
         ( "OpenAI:alloy[ja_JP]", 1001, 'ja_JP' ),
         ( "OpenAI:echo[ja_JP]", 1002, 'ja_JP' ),
         ( "OpenAI:fable[ja_JP]", 1003, 'ja_JP' ),
-        ( "OpenAI:onyx[ja_JP]", 1004, 'ja_JP' ),
-        ( "OpenAI:nova[ja_JP]", 1005, 'ja_JP' ),
-        ( "OpenAI:shimmer[ja_JP]", 1006, 'ja_JP' ),
+        ( "OpenAI:onyx[ja_JP]", 1004, 'ja_JP' ), # 男性っぽい
+        ( "OpenAI:nova[ja_JP]", 1005, 'ja_JP' ), # 女性っぽい
+        ( "OpenAI:shimmer[ja_JP]", 1006, 'ja_JP' ), # 女性ぽい
     ]
 
     @staticmethod
@@ -314,7 +314,7 @@ class TalkEngine:
 
     def add_talk(self, full_text:str, emotion:int = 0 ) -> None:
         talk_id:int = self._talk_id
-        for text in TalkEngine.split_string(full_text):
+        for text in BotUtils.split_string(full_text):
             self.wave_queue.put( (talk_id, text, emotion ) )
         with self.lock:
             if self._running_future is None:
@@ -406,11 +406,24 @@ class TalkEngine:
         if self._disable_gtts>0 and (time.time()-self._disable_gtts)<180.0:
             return None,None
         try:
+            vc:str = "alloy"
+            if self.speaker==1001:
+                vc = "alloy"
+            elif self.speaker==1002:
+                vc = "echo"
+            elif self.speaker==1003:
+                vc = "fable"
+            elif self.speaker==1004:
+                vc = "onyx"
+            elif self.speaker==1005:
+                vc = "nova"
+            elif self.speaker==1006:
+                vc = "shimmer"
             self._disable_gtts = 0
             client:OpenAI = get_client()
             response:openai._base_client.HttpxBinaryResponseContent = client.audio.speech.create(
                 model="tts-1",
-                voice="alloy",
+                voice=vc,
                 response_format="mp3",
                 input=text
             )
@@ -476,21 +489,6 @@ class TalkEngine:
                     
             except Exception as ex:
                 traceback.print_exc()
-
-    @staticmethod
-    def split_string(text:str) -> list[str]:
-        # 文字列を改行で分割
-        lines = text.split("\n")
-        # 句読点で分割するための正規表現パターン
-        pattern = r"(?<=[。．！？])"
-        # 分割結果を格納するリスト
-        result = []
-        # 各行を句読点で分割し、結果をリストに追加
-        for line in lines:
-            sentences = re.split(pattern, line)
-            result.extend(sentences)
-        # 空の要素を削除して結果を返す
-        return list(filter(None, result))
 
 class BotUtils:
 
@@ -733,6 +731,57 @@ class BotUtils:
                 mesg = mesg[:-2]
                 continue
             return mesg
+
+    @staticmethod
+    def split_string(text:str) -> list[str]:
+        # 文字列を改行で分割
+        lines = text.split("\n")
+        # 句読点で分割するための正規表現パターン
+        pattern = r"(?<=[。．！？])"
+        # 分割結果を格納するリスト
+        result = []
+        # 各行を句読点で分割し、結果をリストに追加
+        for line in lines:
+            sentences = re.split(pattern, line)
+            result.extend(sentences)
+        # 空の要素を削除して結果を返す
+        return list(filter(None, result))
+
+    # 文字列の左側の空白を数える
+    @staticmethod
+    def count_left_space( value:str ) -> int:
+        if value is None:
+            return 0
+        n:int = 0
+        for cc in value:
+            if cc==" ":
+                n+=1
+            else:
+                break
+        return n
+
+    # 複数行文字列のインデント
+    def str_indent( value:str ) -> str:
+        if( value is None ):
+            return []
+        lines:list[str] = value.split('\n')
+        while len(lines)>0:
+            if lines[0].strip() == "":
+                lines.pop(0)
+            else:
+                break
+        while len(lines)>0:
+            if lines[-1].strip() == "":
+                lines.pop()
+            else:
+                break
+        left_spc:int = 99999
+        for l in lines:
+            n:int = BotUtils.count_left_space(l)
+            if n<left_spc:
+                left_spc=n
+        return "\n".join( [ l[left_spc:] for l in lines] )
+
 def test():
     a = BotUtils.to_embedding( 'aaaa' )
     BotUtils.eq(

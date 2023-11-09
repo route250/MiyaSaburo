@@ -17,8 +17,9 @@ class DxPlanEmoChatBot(DxEmoChatBot):
     }
     TASK_FMT = {
         'タイトル': '実行するタスクのタイトル',
-        '作業内容': 'タスクで処理する内容、調べる内容、考える内容など',
-        '達成条件': 'タスクの完了を判定する条件など'
+        '作業内容': 'タスクで処理する内容、調べる内容、考える、話す内容など',
+        '達成条件': 'タスクの完了を判定する条件など',
+        '種別': 'NothingToDo, ResearchTask, ThinkingTask, TalkTaskから選択して下さい。'
     }
     TALK_FMT = {
         'タイトル': '会話のタイトル',
@@ -45,7 +46,7 @@ class DxPlanEmoChatBot(DxEmoChatBot):
 
         prompt:str = ""
 
-        profile = self.create_promptA()
+        profile = self.create_profile_prompt()
         if BotUtils.length(profile)>0:
             prompt = profile + "\n\n"
 
@@ -79,7 +80,7 @@ class DxPlanEmoChatBot(DxEmoChatBot):
             self.update_info( {'plan':self.plan_data } )
 
     #Override
-    def create_promptB(self) -> str:
+    def create_before_hist_prompt(self) -> str:
         self.eval_plan()
         plan_text:str = BotUtils.to_prompt(self.plan_data)
         prompt = f"Current plan:\n{plan_text}"
@@ -94,27 +95,30 @@ class DxPlanEmoChatBot(DxEmoChatBot):
     def _do_task(self) -> None:
         try:
             self.eval_plan()
+            # 基本とプロファイルをプロンプトに追加
+            prompt = BotUtils.join_str(self.create_prompt0(), self.create_profile_prompt(), sep="\n" )
+            # 現在のプランを提示
+            prompt = BotUtils.join_str( prompt, self.create_before_hist_prompt(), sep="\n\n" )
 
-            prompt = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n" )
-
-            prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
-
-            prompt += f"\n\n1) 貴方の行動を、NothingToDo, StartNewTask, StartNewTalk から選択して下さい。\n貴方の行動:"
-
-            prompt += f"\n\n2) NothinToDoを選択した場合は、ここで終了です。"
-            prompt += f"\n\n3) StartNewTaskを選択した場合は、以下のフォーマットで内容を記述して下さい。"
+            prompt += BotUtils.str_indent("""
+                    1) 貴方が選択できる行動の種別は下記です。
+                        NothingToDo: 今は何もしません。
+                        ResearchTask: インターネットを使って何かを調べる。
+                        ThinkingTask: LLMを使って何かを考える。
+                        TalkTask: 人間と何かを話します。
+                    """)
+            prompt += f"\n\n2) 貴方の行動を選択して、以下のフォーマットで記述して下さい。"
             prompt += "\n" +BotUtils.to_format( DxPlanEmoChatBot.TASK_FMT )
-            prompt += f"\n\n4) StartNewTalkを選択した場合は、以下のフォーマットで内容を記述して下さい。"
-            prompt += "\n" +BotUtils.to_format( DxPlanEmoChatBot.TALK_FMT )
             prompt += f"\n\n貴方の行動:"
             print( f"-------\n{prompt}\n------")
             ret:str = self.Completion( prompt )
             print(ret)
             if ret is None or len(ret.strip())==0:
                 return
-            if ret.find("StartNewTalk")>=0:
+            if ret.find("TalkTask")>=0:
                 self._do_start_new_talk(ret)
-
+            else:
+                self._do_start_new_talk(ret)
         except Exception as ex:
             traceback.print_exc()
         finally:
@@ -132,8 +136,8 @@ class DxPlanEmoChatBot(DxEmoChatBot):
                 print( f"[NewTalk] sleep 1")
                 time.sleep(1.0)
 
-            prompt = BotUtils.join_str(self.create_prompt0(), self.create_promptA(), sep="\n" )
-            prompt = BotUtils.join_str( prompt, self.create_promptB(), sep="\n\n" )
+            prompt = BotUtils.join_str(self.create_prompt0(), self.create_profile_prompt(), sep="\n" )
+            prompt = BotUtils.join_str( prompt, self.create_before_hist_prompt(), sep="\n\n" )
             prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list )
             prompt += f"Conversation history:\n{prompt_history}\n\n"
             prompt = BotUtils.join_str( prompt, "会話タスクを開始します。")
@@ -141,6 +145,8 @@ class DxPlanEmoChatBot(DxEmoChatBot):
             prompt = BotUtils.join_str( prompt, "貴方の次のセリフ:", sep="\n\n")
             print( f"-------\n{prompt}\n------")
             ret:str = self.Completion( prompt )
+            ret = BotUtils.strip_message(ret)
+            ret = BotUtils.split_string(ret)[0]
             print(ret)
             with self.lock:
                 self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, ret ) )

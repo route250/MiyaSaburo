@@ -23,7 +23,7 @@ class DxEmoChatBot(DxChatBot):
 
     #Override
     def eval_emotion(self) -> str:
-        profile = self.create_promptA()
+        profile = self.create_profile_prompt()
 
         prompt:str = ""
         if profile is not None:
@@ -45,7 +45,7 @@ class DxEmoChatBot(DxChatBot):
             self.update_info( {'emotions': self.emotion_data} )
 
     #Override
-    def create_promptC(self) -> str:
+    def create_after_hist_prompt(self) -> str:
         self.eval_emotion()
         emotion_text:str = BotUtils.to_prompt(self.emotion_data)
         prompt = f"Below are your emotional parameters. Please behave accordingly to this feeling.\n{emotion_text}"
