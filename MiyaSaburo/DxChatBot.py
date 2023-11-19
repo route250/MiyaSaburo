@@ -91,12 +91,13 @@ class DxChatBot(BotCore):
                 pass
 
     def _timer_event2(self,now) ->None:
-        m1:float = 0.1 # 0.5
-        m2:float = 0.5 # 3.0
+        m1:float = 0.5 # 0.5
+        m2:float = 1.0 # 3.0
         m3:float = 1.0 # 15.0
         live:bool = True
         try:
             with self.lock:
+                limit:float = 0
                 tm:float = now - self._tm_last_action
                 try:
                     if self._tm_future is not None:
@@ -106,7 +107,8 @@ class DxChatBot(BotCore):
                     if before == ChatState.Init:
                         self.chatstate = ChatState.InitBusy
                     elif before == ChatState.InTalkReady:
-                        if tm>(m1*60.0):
+                        limit = m1 * 60.0
+                        if tm>limit:
                             self._tm_count += 1
                             if self._tm_count<=3:
                                 self.chatstate = ChatState.InTalkBusy
@@ -114,11 +116,13 @@ class DxChatBot(BotCore):
                                 self._tm_count = 1
                                 self.chatstate = ChatState.ShortBreakBusy
                     elif before == ChatState.ShortBreakReady:
-                        if tm>(m2*60.0):
+                        limit = m2*60.0
+                        if tm>limit:
                             self._tm_count = 1
                             self.chatstate = ChatState.LongBreakBusy
                     elif before == ChatState.LongBreakReady:
-                        if tm>(m3*60.0):
+                        limit = m3*60.0
+                        if tm>limit:
                             self.chatstate = ChatState.LongBreakBusy
                     # 処理起動
                     if before != self.chatstate:
@@ -135,7 +139,8 @@ class DxChatBot(BotCore):
             pass
         finally:
             if live:
-                self.update_info( {'stat': self.chatstate.name, 'tm': int(tm) } )
+                xtm = max( limit -tm, 0 )
+                self.update_info( {'stat': self.chatstate.name, 'tm': int(xtm) } )
 
     def _timer_event_task(self, before, count, after ) ->None:
         try:
@@ -169,6 +174,10 @@ class DxChatBot(BotCore):
         if self.chat_callback is not None:
             self.chat_callback( ChatMessage.ASSISTANT, text, emotion, tts_model )
 
+    def tts_cancel(self) -> None:
+        if self.tts is not None:
+            self.tts.cancel()
+
     def submit_task(self, func ) -> Future:
         return self.executor.submit( func )
 
@@ -178,11 +187,7 @@ class DxChatBot(BotCore):
         self.update_info( {'api_mode': la } )
         return mode
 
-    def cancel(self) -> None:
-        if self.tts is not None:
-            self.tts.cancel()
-
-    def send_message(self, message:str, *, role:str = ChatMessage.USER ) -> bool:
+    def send_message(self, message:str, *, role:str = ChatMessage.USER, bg:bool=True ) -> bool:
         self.start()
         with self.lock:
             if self.next_message is not None:
@@ -195,10 +200,13 @@ class DxChatBot(BotCore):
                 self.chatstate = ChatState.InTalkBusy
                 self._tm_count = 1
                 self._tm_last_action = time.time()
-            self.futures.append( self.executor.submit( self.do_chat_talk ) )
-        self.cancel()
+            if bg:
+                self.futures.append( self.executor.submit( self.do_chat_talk ) )
+        self.tts_cancel()
         if self.chat_callback is not None and role != ChatMessage.SYSTEM:
             self.chat_callback( role, message, 0 )
+        if not bg:
+            self.do_chat_talk()
         return True
 
     def create_profile_prompt(self) -> str:
@@ -230,7 +238,8 @@ class DxChatBot(BotCore):
                 message = self.do_instruct()
             message = self.message_strip(message)
             with self.lock:
-                self.mesg_list.append( self.next_message )
+                if self.next_message.role != ChatMessage.SYSTEM:
+                    self.mesg_list.append( self.next_message )
                 self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, message ) )
         except Exception as ex:
             traceback.print_exc()

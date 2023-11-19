@@ -42,6 +42,7 @@ if not os.path.exists("logs"):
 logger = logging.getLogger("AIbot")
 logger.setLevel(logging.DEBUG)
 loghdr = TimedRotatingFileHandler('logs/bot.log', when='midnight', backupCount=7)
+loghdr.encoding = 'utf8'
 loghdr.setFormatter( logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
 loghdr.setLevel(logging.DEBUG)
 conhdr = logging.StreamHandler()
@@ -51,7 +52,7 @@ logger.addHandler(loghdr)
 logger.addHandler(conhdr)
 api_logger = logging.getLogger("api")
 api_logger.setLevel(logging.DEBUG)
-loghdr = TimedRotatingFileHandler('logs/api.log', when='midnight', backupCount=7)
+loghdr = TimedRotatingFileHandler('logs/api.log', encoding='utf8', when='midnight', backupCount=7)
 loghdr.setFormatter( logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 api_logger.addHandler(loghdr)
 
