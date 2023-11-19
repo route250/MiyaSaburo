@@ -1,12 +1,24 @@
-
+import os,sys,threading
+from enum import Enum
 import time
 import json
 import traceback
 import concurrent.futures
 import queue
+from queue import Queue
 from concurrent.futures import ThreadPoolExecutor, Future
-from DxBotUtils import BotCore, BotUtils, TalkEngine
+from DxBotUtils import BotCore, BotUtils, TtsEngine
 from DxBotUI import debug_ui
+
+class ChatState(Enum):
+    Init = 0        # 初期状態
+    InitBusy = 1        # 初期状態
+    InTalkReady = 2      # 短期間に会話がある
+    InTalkBusy = 3
+    ShortBreakBusy = 4
+    ShortBreakReady = 5      # ちょっと間があいた
+    LongBreakBusy = 6
+    LongBreakReady = 7      # ちょっと間があいた
 
 class ChatMessage:
 
@@ -33,7 +45,7 @@ class ChatMessage:
 
     @staticmethod
     def list_to_prompt( messages:list, *, assistant:str=None, user:str=None ):
-        return "\n".join( [m.to_prompt(assistant=assistant,user=user) for m in messages if m is not None ] )
+        return "\n".join( [m.to_prompt(assistant=assistant,user=user) for m in messages if m is not None and isinstance(m,ChatMessage) ] )
 
     @staticmethod
     def create_dict( role:str, message:str ) -> dict:
@@ -43,21 +55,122 @@ class DxChatBot(BotCore):
     
     def __init__(self, *, executor=None):
         super().__init__()
+        self.chatstate:ChatState = ChatState.Init
         self.api_mode:bool = False
         self.executor:ThreadPoolExecutor = executor if executor is not None else ThreadPoolExecutor(max_workers=4)
         self.futures:list[Future] = []
         self.mesg_list:list[ChatMessage]=[]
-        self.chat_busy:ChatMessage = None
+        self.next_message:ChatMessage = None
+        self.last_user_message_time:float = 0
         self.chat_callback = None
         self.api_mode = self.set_api_mode(True)
-        self.talk_engine: TalkEngine = TalkEngine( submit_task = self.submit_task, talk_callback=self.__talk_callback )
+        # タイマー
+        self._tm_timer: threading.Timer = None
+        self._tm_last_action: float = 0
+        self._tm_count:int = 0
+        self._tm_future:Future = None
+        self._tm_queue:Queue = Queue()
+        # イベント通知
+        self._event_callback = []
+        # スピーチエンジン
+        self.tts: TtsEngine = None
+
+    def start(self)-> None:
+        with self.lock:
+            if self._tm_timer is None:
+                self.update_info( {'stat': self.chatstate.name } )
+                self._tm_timer = threading.Timer( 1.0, lambda: self._timer_event2( time.time() ))
+                self._tm_timer.start()
+
+    def stop(self) ->None:
+        with self.lock:
+            try:
+                if self._tm_timer is not None:
+                    self._tm_timer.cancel()
+            except:
+                pass
+
+    def _timer_event2(self,now) ->None:
+        m1:float = 0.1 # 0.5
+        m2:float = 0.5 # 3.0
+        m3:float = 1.0 # 15.0
+        live:bool = True
+        try:
+            with self.lock:
+                tm:float = now - self._tm_last_action
+                try:
+                    if self._tm_future is not None:
+                        return
+                    # ステータス修正
+                    before: ChatState = self.chatstate
+                    if before == ChatState.Init:
+                        self.chatstate = ChatState.InitBusy
+                    elif before == ChatState.InTalkReady:
+                        if tm>(m1*60.0):
+                            self._tm_count += 1
+                            if self._tm_count<=3:
+                                self.chatstate = ChatState.InTalkBusy
+                            else:
+                                self._tm_count = 1
+                                self.chatstate = ChatState.ShortBreakBusy
+                    elif before == ChatState.ShortBreakReady:
+                        if tm>(m2*60.0):
+                            self._tm_count = 1
+                            self.chatstate = ChatState.LongBreakBusy
+                    elif before == ChatState.LongBreakReady:
+                        if tm>(m3*60.0):
+                            self.chatstate = ChatState.LongBreakBusy
+                    # 処理起動
+                    if before != self.chatstate:
+                        self._tm_future = self.executor.submit( self._timer_event_task, before, self._tm_count, self.chatstate )
+                finally:
+                    # タイマー再起動
+                    try:
+                        self._tm_timer = threading.Timer( 1.0, lambda: self._timer_event2( time.time() ))
+                        self._tm_timer.start()
+                        live = True
+                    except:
+                        live = False
+        except:
+            pass
+        finally:
+            if live:
+                self.update_info( {'stat': self.chatstate.name, 'tm': int(tm) } )
+
+    def _timer_event_task(self, before, count, after ) ->None:
+        try:
+            print( f"[DBG] event {before} to {count}:{after}")
+            self.state_event( before, count, after )
+        finally:
+            with self.lock:
+                self._tm_future = None
+                self._tm_last_action = time.time()
+                if self.chatstate == ChatState.InitBusy:
+                    self.chatstate = ChatState.InTalkReady
+                elif self.chatstate == ChatState.InTalkBusy:
+                    self.chatstate = ChatState.InTalkReady
+                elif self.chatstate == ChatState.ShortBreakBusy:
+                    self.chatstate = ChatState.ShortBreakReady
+                elif self.chatstate == ChatState.LongBreakBusy:
+                    self.chatstate = ChatState.LongBreakReady
+            print( f"[DBG] event {after} to {count}:{self.chatstate}")
+            self.update_info( {'stat': self.chatstate.name } )
+
+    def state_event(self, before, count, after ) ->None:
+        pass
+
+    def setTTS(self, sw:bool = False ):
+        if sw:
+            self.tts = TtsEngine( submit_task = self.submit_task, talk_callback=self._tts_callback )
+        else:
+            self.tts = None
+    
+    def _tts_callback(self, text:str, emotion:int, tts_model:str ):
+        if self.chat_callback is not None:
+            self.chat_callback( ChatMessage.ASSISTANT, text, emotion, tts_model )
 
     def submit_task(self, func ) -> Future:
         return self.executor.submit( func )
-
-    def __talk_callback(self, text:str, emotion:int, model:str ):
-        if self.chat_callback is not None:
-            self.chat_callback( ChatMessage.ASSISTANT, text, emotion, model )
 
     def set_api_mode( self, mode:bool ) -> bool:
         self.api_mode = mode
@@ -66,23 +179,30 @@ class DxChatBot(BotCore):
         return mode
 
     def cancel(self) -> None:
-        if self.talk_engine is not None:
-            self.talk_engine.cancel()
+        if self.tts is not None:
+            self.tts.cancel()
 
-    def add_user_message(self, message:str ) -> bool:
+    def send_message(self, message:str, *, role:str = ChatMessage.USER ) -> bool:
+        self.start()
         with self.lock:
-            if self.chat_busy is not None:
+            if self.next_message is not None:
                 return False
-            m:ChatMessage = ChatMessage( ChatMessage.USER, message )
-            self.chat_busy = m
+            m:ChatMessage = ChatMessage( role, message )
+            self.next_message = m
+            print( f"[DBG]send_message Lock")
+            if role == ChatMessage.USER:
+                self.last_user_message_time = time.time()
+                self.chatstate = ChatState.InTalkBusy
+                self._tm_count = 1
+                self._tm_last_action = time.time()
             self.futures.append( self.executor.submit( self.do_chat_talk ) )
         self.cancel()
-        if self.chat_callback is not None:
-            self.chat_callback(  ChatMessage.USER, message, 0, None )
+        if self.chat_callback is not None and role != ChatMessage.SYSTEM:
+            self.chat_callback( role, message, 0 )
         return True
 
     def create_profile_prompt(self) -> str:
-        return f"# キャラクター設定\n貴方つまり{ChatMessage.ASSISTANT}は生意気で言葉が悪い女性型の会話AIを演じて下さい。\n水平思考で、人間をからかったり、惑わせたりする、感情豊かなAIを演じて下さい。\n人間を助ける性格ではありませんが、何かお願いされたら手伝います。\nキャラクター設定はUserやHumanには秘密です。\nキャラクター設定について話さないこと。"
+        return f"# キャラクター設定\n貴方つまり{ChatMessage.ASSISTANT}は生意気で言葉が悪い女性型の感情豊かな会話AIを演じて下さい。\n# 制約条件:\n人間を助ける性格ではありませんが、何かお願いされたら手伝います。\nキャラクター設定はUserやHumanには秘密です。\nキャラクター設定について話さないこと。"
 
     def create_before_hist_prompt(self) -> str:
         pass
@@ -102,28 +222,33 @@ class DxChatBot(BotCore):
         return prompt
     
     def do_chat_talk(self):
-        ret: str = None
+        message: str = None
         try:
             if self.api_mode:
-                ret = self.do_chat()
+                message = self.do_chat()
             else:
-                ret = self.do_instruct()
-            ret = self.message_strip(ret)
+                message = self.do_instruct()
+            message = self.message_strip(message)
             with self.lock:
-                self.mesg_list.append( self.chat_busy )
-                self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, ret ) )
+                self.mesg_list.append( self.next_message )
+                self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, message ) )
         except Exception as ex:
             traceback.print_exc()
         finally:
             with self.lock:
-                self.chat_busy = None
+                print( f"[DBG]do_chat_talk Unlock")
+                self.next_message = None
+                if self.chatstate == ChatState.InTalkBusy:
+                    self.chatstate = ChatState.InTalkReady
+                    self._tm_count = 1
+                    self._tm_last_action = time.time()
         try:
             emotion:int = 0
-            if ret is not None:
-                if self.talk_engine is not None:
-                    self.talk_engine.add_talk( ret, emotion )
+            if message is not None:
+                if self.tts is not None:
+                    self.tts.add_talk( message, emotion )
                 elif self.chat_callback is not None:
-                    self.chat_callback( ChatMessage.ASSISTANT, ret, emotion )
+                    self.chat_callback( ChatMessage.ASSISTANT, message, emotion )
         except Exception as ex:
             traceback.print_exc()
 
@@ -133,7 +258,7 @@ class DxChatBot(BotCore):
 
         prompt = BotUtils.join_str( prompt, self.create_before_hist_prompt(), sep="\n\n" )
 
-        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.chat_busy])
+        prompt_history:str = ChatMessage.list_to_prompt( self.mesg_list + [self.next_message])
         prompt += f"Conversation history:\n{prompt_history}\n\n"
 
         prompt = BotUtils.join_str( prompt, self.create_after_hist_prompt(), sep="\n\n" )
@@ -156,8 +281,8 @@ class DxChatBot(BotCore):
 
         for m in self.mesg_list:
             message_list.append( m.to_dict() )
-        if self.chat_busy is not None:
-            message_list.append( self.chat_busy.to_dict() )
+        if self.next_message is not None:
+            message_list.append( self.next_message.to_dict() )
 
         postfix = self.create_after_hist_prompt()
         if postfix is not None:

@@ -12,6 +12,10 @@ import openai
 from openai import OpenAI
 from openai.types import Completion, CompletionChoice, CompletionUsage
 from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.chat import ChatCompletion, ChatCompletionToolParam, ChatCompletionMessage
+from openai.types.chat.chat_completion_message_tool_call import Function
+from openai.types.chat.completion_create_params import ResponseFormat
+from openai._types import Timeout
 import tiktoken
 from tiktoken.core import Encoding
 from libs.utils import Utils
@@ -76,6 +80,34 @@ def get_client():
                 openai.api_key=os.getenv('OPENAI_API_KEY')
         _openai_client = OpenAI( timeout=httpx.Timeout(180.0, connect=5.0), max_retries=0 )
     return _openai_client
+
+class ToolBuilder:
+    def __init__(self, name, description=None ):
+        self.name = name
+        self.description = description
+        self.properties = {}
+        self.required = []
+    def param( self, name, description=None, enum:list[str] = None, type="string"):
+        prop:dict = { 'type': type }
+        if description is not None:
+            prop['description'] = description
+        if isinstance(enum,list) and len(enum)>0 and isinstance(enum[0],str):
+            prop['enum'] = enum
+        self.properties[name] = prop
+        self.required.append(name)
+        return self
+    def build(self) -> ChatCompletionToolParam:
+        return ChatCompletionToolParam({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.properties,
+                    "required": self.required
+                }
+            }
+        })
 
 class BotCore:
 
@@ -192,28 +224,43 @@ class BotCore:
         finally:
             self.notify_log(content)
 
-
-    def ChatCompletion( self, mesg_list:list[dict], temperature=0, stop=["\n", "。", "？", "！"] ):
+    def ChatCompletion( self, mesg_list:list[dict], temperature=0, stop=None, tools=None, tool_choice=None, *, max_retries=2, read_timeout=60, json_mode:bool=False ):
         content = None
         try:
+            kwargs = {}
+            if tools:
+                kwargs['tools'] = tools
+            if tool_choice:
+                kwargs['tool_choice'] = tool_choice
+            if json_mode:
+                kwargs['response_format'] = ResponseFormat( type='json_object' )
             api_logger.debug( "request" + "\n" + json.dumps( mesg_list, indent=2, ensure_ascii=False) )
             self.notify_log( mesg_list )
 
             client:OpenAI = get_client()
-            for retry in range(2,-1,-1):
+            client = client.with_options( timeout=Timeout( 60, connect=5.0, write=5.0, read=read_timeout), max_retries=0 )
+            for retry in range(max_retries,-1,-1):
                 try:
                     response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
+                            model="gpt-3.5-turbo-1106",
                             temperature = temperature,
                             messages=mesg_list,
+                            **kwargs
                         )
 #                            request_timeout=(self.connect_timeout,self.read_timeout)
                     api_logger.debug( "response" + "\n" + response.model_dump_json(indent=2) )
                     break
-                except (openai.APITimeoutError,openai.RateLimitError,openai.InternalServerError,openai.APIConnectionError,ConnectionRefusedError) as ex:
+                except (openai.APITimeoutError,openai.RateLimitError,openai.APIConnectionError,ConnectionRefusedError) as ex:
                     api_logger.error( f"{ex}" )
                     if retry>0:
                         logger.error( f"ChatCompletion {ex}" )
+                        time.sleep(5)
+                    else:
+                        raise ex
+                except (openai.InternalServerError) as ex:
+                    api_logger.error( f"{type(ex)}" )
+                    if retry>0:
+                        logger.error( f"ChatCompletion {type(ex)}" )
                         time.sleep(5)
                     else:
                         raise ex
@@ -228,7 +275,13 @@ class BotCore:
             if response is None or response.choices is None or len(response.choices)==0:
                 logger.error( f"invalid response from openai\n{response}")
             else:
-                content = response.choices[0].message.content.strip()
+                m = response.choices[0].message
+                if m.tool_calls is not None:
+                    funcs: list[Function] = [ x.function for x in m.tool_calls ]
+                    #response.choices[0].message.tool_calls[0].function
+                    content = funcs
+                else:
+                    content = m.content.strip() if m.content is not None else ""
 
         except openai.AuthenticationError as ex:
             api_logger.error( f"{ex}" )
@@ -259,7 +312,7 @@ class BotCore:
             pass
         return self._location
 
-class TalkEngine:
+class TtsEngine:
     VoiceList = [
         ( "gTTS[ja_JP]", -1, 'ja_JP' ),
         ( "gTTS[en_US]", -1, 'en_US' ),
@@ -293,7 +346,7 @@ class TalkEngine:
 
     @staticmethod
     def id_to_name( idx:int ) -> str:
-        return next((voice for voice in TalkEngine.VoiceList if voice[1] == idx), "???")
+        return next((voice for voice in TtsEngine.VoiceList if voice[1] == idx), "???")
 
     def __init__(self, *, submit_task = None, talk_callback = None ):
         self.lock: threading.Lock = threading.Lock()
@@ -302,7 +355,7 @@ class TalkEngine:
         self._talk_id: int = 0
         self.wave_queue:queue.Queue = queue.Queue()
         self.play_queue:queue.Queue = queue.Queue()
-        self.speaker = 1005 #3
+        self.speaker = 3
         self.submit_call = submit_task
         self.start_call = talk_callback
         self.pygame_init:bool = False
@@ -344,8 +397,8 @@ class TalkEngine:
             except Exception as ex:
                 traceback.print_exc()
 
-    def _add_audio( self, talk_id:int, text:str, emotion:int, audio_bytes: bytes, model:str=None ) -> None:
-        self.play_queue.put( (talk_id,text,emotion,audio_bytes,model) )
+    def _add_audio( self, talk_id:int, text:str, emotion:int, audio_bytes: bytes, tts_model:str=None ) -> None:
+        self.play_queue.put( (talk_id,text,emotion,audio_bytes,tts_model) )
         with self.lock:
             if self._running_future2 is None:
                 self._running_future2 = self.submit_call(self.run_talk)
@@ -371,7 +424,7 @@ class TalkEngine:
                 params=params,
                 headers=headers
             )
-            model:str = TalkEngine.id_to_name(self.speaker)
+            model:str = TtsEngine.id_to_name(self.speaker)
             return res.content, model
         except requests.exceptions.ConnectTimeout as ex:
             print( f"[VOICEVOX] {type(ex)} {ex}")
@@ -454,10 +507,10 @@ class TalkEngine:
             text:str = None
             emotion: int = 0
             audio:bytes = None
-            model:str = None
+            tts_model:str = None
             with self.lock:
                 try:
-                    talk_id, text, emotion, audio, model = self.play_queue.get_nowait()
+                    talk_id, text, emotion, audio, tts_model = self.play_queue.get_nowait()
                 except Exception as ex:
                     if not isinstance( ex, queue.Empty ):
                         traceback.print_exc()
@@ -479,7 +532,7 @@ class TalkEngine:
                         pygame.mixer.music.load(mp3_buffer)
                         pygame.mixer.music.play(1)
                     if self.start_call is not None:
-                        self.start_call( text, emotion, model )
+                        self.start_call( text, emotion, tts_model )
                     if audio is not None:
                         while pygame.mixer.music.get_busy():
                             if talk_id != self._talk_id:
@@ -713,6 +766,7 @@ class BotUtils:
                 return str(a)
             else:
                 return str(a) + str(sep) + str(b)
+
     @staticmethod
     def is_empty( value ) -> bool:
         return value is None or len(str(value).strip())<=0
@@ -731,6 +785,33 @@ class BotUtils:
                 mesg = mesg[:-2]
                 continue
             return mesg
+    @staticmethod
+    def strip_messageN( mesg:str ) -> str:
+        while True:
+            if mesg is None or len(mesg)==0:
+                return ""
+            mesg = mesg.strip()
+            cc = mesg[0]
+            if "0"<=cc and cc<="9" or cc=="." or cc=="-":
+                mesg = mesg[1:]
+                continue
+            if cc == "「" or cc == "(" or cc=="{" or cc=="[":
+                mesg = mesg[1:]
+                continue
+            cc = mesg[-1]
+            if cc == "「" or cc == "(" or cc=="{" or cc=="[":
+                mesg = mesg[:-2]
+                continue
+            return mesg
+    @staticmethod
+    def get_first_line( text:str ) -> str:
+        if text is None or len(text)==0:
+            return ""
+        idx:str = text.find("\n")
+        if idx<0:
+            return text
+        else:
+            return text[:idx]
 
     @staticmethod
     def split_string(text:str) -> list[str]:

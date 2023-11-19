@@ -83,58 +83,69 @@ def chat_ui( root, parent, bot:BotCore ):
     # キューの作成
     update_queue = queue.Queue()
 
+    # 分割
+    HSplit:tk.PanedWindow = tk.PanedWindow( parent, orient='horizontal', sashwidth=8 )
+
     # 左側の列
-    history_textarea = scrolledtext.ScrolledText(parent, height=10)
-    history_textarea.grid(row=0, column=0, columnspan=2, padx=0, pady=0, sticky="nsew")
-    status_label = tk.Label(parent)
-    status_label.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nsew")
-    send_textarea = scrolledtext.ScrolledText(parent, height=3)
-    send_textarea.grid(row=2, column=0, padx=0, pady=0, sticky="nsew")
-    send_button = tk.Button(parent, text=">>")
-    send_button.grid(row=2, column=1, padx=4, pady=4, sticky="ew")
+    left_frame:tk.PanedWindow = tk.PanedWindow( HSplit, orient='vertical', sashwidth=8 )
+    # 左側の上
+    history_textarea = scrolledtext.ScrolledText(left_frame)
+    # 左側の下
+    input_frame = tk.Frame( left_frame )
+    status_label = tk.Label(input_frame)
+    status_label.pack( expand=False, fill='x' )
+    send_textarea = scrolledtext.ScrolledText(input_frame, height=3)
+    send_textarea.pack( expand=True, fill='both')
+    send_button = tk.Button(input_frame, text=">>")
+    send_button.pack( fill='none' )
+    input_frame.pack( expand=True, fill='both' )
 
     # 右側の列
     # Notebook（タブコンテナ）の作成
-    notebook = ttk.Notebook(parent)
-    notebook.grid(row=0, rowspan=3, column=2, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S)
-    notebook.rowconfigure(0,weight=1)
-    notebook.columnconfigure(0,weight=1)
+    right_panel = ttk.Notebook(HSplit)
+
     # タブ1のフレームを作成
-    info_tab = ttk.Frame(notebook )
-    info_tab.grid( row=0, column=0, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S )
+    info_tab = ttk.Frame(right_panel )
     info_textarea = scrolledtext.ScrolledText(info_tab )
-    info_textarea.grid( row=0, column=0, padx=4, pady=4, sticky=tk.W + tk.E + tk.N + tk.S )
-    info_tab.rowconfigure(0,weight=1)
-    info_tab.columnconfigure(0,weight=1)
+    info_textarea.pack( expand=True, fill='both' )
+    info_tab.pack( expand=True, fill='both' )
 
     # タブ2のフレームを作成
-    log_tab = ttk.Frame(notebook)
-    log_tab.grid( row=0, column=0, padx=0, pady=0, sticky=tk.W + tk.E + tk.N + tk.S )
+    log_tab = ttk.Frame(right_panel)
     log_textarea = scrolledtext.ScrolledText(log_tab )
-    log_textarea.grid( row=0, column=0, padx=4, pady=4, sticky=tk.W + tk.E + tk.N + tk.S )
-    log_tab.rowconfigure(0,weight=1)
-    log_tab.columnconfigure(0,weight=1)
+    log_textarea.pack( expand=True, fill='both' )
+    log_tab.pack( expand=True, fill='both' )
 
     # タブをNotebookに追加
-    notebook.add(info_tab, text='Info')
-    notebook.add(log_tab, text='Log')
+    right_panel.add(info_tab, text='Info')
+    right_panel.add(log_tab, text='Log')
+
+    right_panel.pack( fill='both' )
 
     # ウィンドウのグリッド設定
-    parent.grid_columnconfigure(0, weight=10)
-    parent.grid_columnconfigure(1, weight=1)
-    parent.grid_columnconfigure(2, weight=10)
-    parent.grid_rowconfigure(0, weight=10)
-    parent.grid_rowconfigure(1, weight=1)
-    parent.grid_rowconfigure(2, weight=3)
+    left_frame.add( history_textarea, stretch='first' )
+    left_frame.add( input_frame, stretch='first' )
+    left_frame.pack( expand=True, fill='both' )
+    HSplit.add( left_frame, stretch='first' )
+    HSplit.add( right_panel )
+    HSplit.pack( expand=True, fill='both' )
 
     def send_to_bot():
         response_text = send_textarea.get('1.0', tk.END)
-        if bot.add_user_message( response_text.strip() ):
-            send_textarea.delete('1.0',tk.END)
-            log_textarea.delete(1.0,tk.END)
+        if response_text is not None:
+            response_text = response_text.strip()
+            if len(response_text)>0:
+                if bot.send_message( response_text ):
+                    send_textarea.delete('1.0',tk.END)
+                    log_textarea.delete(1.0,tk.END)
+            else:
+                send_textarea.delete('1.0',tk.END)
     send_button.config(command=send_to_bot)
+    def ev_enter(ev):
+        send_to_bot()
+    send_textarea.bind( '<Return>', ev_enter )
 
-    def append_message( role, message:str, emotion:int=0, model:str=None ):
+    def append_message( role, message:str, emotion:int=0, tts_model:str=None ):
         current:str = history_textarea.get(1.0,tk.END)
         text:str = f"{role}: {message}"
         if len(current.strip())==0:
@@ -144,7 +155,7 @@ def chat_ui( root, parent, bot:BotCore ):
             history_textarea.insert(tk.END,"\n"+text)
         history_textarea.see( tk.END )
 
-    bot.chat_callback = lambda role,message,emotion,model: append_message(role,message,emotion,model)
+    bot.chat_callback = lambda role,message,emotion=0,tts_model=None : append_message(role,message,emotion,tts_model)
 
     def update_info( data ):
         message:str = json.dumps( data, indent=4, ensure_ascii=False, sort_keys=True )
@@ -172,6 +183,8 @@ def chat_ui( root, parent, bot:BotCore ):
             # 100ms後に再度この関数を呼び出す
             root.after(100, lambda: check_queue() )
     check_queue()
+
+    bot.start()
 
 def debug_ui( bot: BotCore ):
 
@@ -208,3 +221,4 @@ def debug_ui( bot: BotCore ):
     root.grid_rowconfigure(0, weight=10)
     # メインループ
     root.mainloop()
+    bot.stop()
