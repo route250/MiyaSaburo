@@ -13,7 +13,7 @@ import asyncio
 import re
 from queue import Queue
 import queue
-from langchain import LLMMathChain
+from langchain.chains import LLMMathChain
 import pyaudio
 import speech_recognition as sr
 
@@ -919,7 +919,7 @@ def is_cancel(text):
             return True
     return False
 
-import langchain.tools.python
+import langchain_experimental.tools.python
 def LLM_process():
     """LLM"""
     from libs.BotCustomCallbackHandler import BotCustomCallbackHandler
@@ -934,7 +934,7 @@ def LLM_process():
             "お手伝いできることがありますか？","他に何かお手伝いできることはありますか？",
             "どのようなお話しをしましょうか？"]
         query=""
-        openai_model='gpt-3.5-turbo'
+        openai_model='gpt-3.5-turbo-1106'
         #openai_model='gpt-4'
 
         match_llm = ChatOpenAI(temperature=0, max_tokens=2000, model=openai_model)
@@ -1027,7 +1027,7 @@ def LLM_process():
                     try:
                         res_text = agent_chain.run(input=query,callbacks=[callback_hdr])
                         break
-                    except openai.error.APIError as ex:
+                    except openai.APIError as ex:
                         if not "You can retry your request" in str(ex):
                             raise ex
                         print(ex)
@@ -1035,7 +1035,7 @@ def LLM_process():
                 print(f"[LLM] GPT text:{res_text}")
             except KeyboardInterrupt as ex:
                 print("[LLM] cancel" )
-            except openai.error.APIError as ex:
+            except openai.APIError as ex:
                 traceback.print_exc()
             except Exception as ex:
                 traceback.print_exc()
