@@ -9,7 +9,13 @@ from DxChatBot import ChatState,ChatMessage,DxChatBot
 from DxEmoChatBot import DxEmoChatBot
 from DxBotUI import debug_ui
 
-next_prompts = [ '相手の反応がありませんが、違う言葉で話題を続けましょう。', '相手の反応がありません。違う言葉で話題を少し変えてみましょう。', '相手の反応がありません。寝ましょう。']
+next_prompts = [ 
+    '私は今、起動したところです。相手に話しかけてみます。',
+    '相手の反応がないけど、話題を続けましょう。',
+    '相手の反応がないので、違う話題を話してみましょう。',
+    '相手の反応がないので、返事を催促しましょう。'
+]
+
 class DxPlanEmoChatBot2(DxEmoChatBot):
 
     def __init__(self):
@@ -19,23 +25,25 @@ class DxPlanEmoChatBot2(DxEmoChatBot):
         pass
     # override
     def state_event(self, before, count, after ) ->None:
+        role:str = ChatMessage.ASSISTANT
+        prompt:str = None
         if after == ChatState.InTalkBusy:
-            p:str = None
             if count==1 and len(self.mesg_list)==0:
-                p = 'まだ会話がありません。あなたから話しかけて下さい。'
+                prompt = next_prompts[0]
             else:
-                p = next_prompts[count%len(next_prompts)]
-            if p is not None:
-                print( f"[DBG] aaaaa {after} {p}" )
-                self.send_message( p, role=ChatMessage.SYSTEM, bg=False )
-            else:
-                print( f"[DBG] aaaaa {after} {p} skip" )
-
+                n:int = len(next_prompts) - 1
+                idx = (count-1) % n + 1
+                prompt = next_prompts[idx]
+        elif after == ChatState.ShortBreakBusy:
+            prompt = "相手の反応がないので、会話をおわらせましょう。"
         elif after == ChatState.LongBreakBusy:
-            print( f"[DBG] aaaaa {after}" )
-            self.send_message( 'Userからの応答がないから、あなたの最後の会話の続きを生成して。', role=ChatMessage.SYSTEM, bg=False )
+            prompt = None
+
+        if prompt is not None and role is not None:
+            print( f"[DBG] event {after} {count} {prompt}" )
+            self.send_message( prompt, role=role, hide=True, keep=False, templeture=0.7, bg=False )
         else:
-            print( f"[DBG] skip {after}" )
+            print( f"[DBG] event {after} {count} {prompt} skip" )
 
 def test():
     bot: DxPlanEmoChatBot2 = DxPlanEmoChatBot2()

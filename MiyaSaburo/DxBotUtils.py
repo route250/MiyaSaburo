@@ -225,18 +225,21 @@ class BotCore:
         finally:
             self.notify_log(content)
 
-    def ChatCompletion( self, mesg_list:list[dict], temperature=0, stop=None, tools=None, tool_choice=None, *, max_retries=2, read_timeout=60, json_mode:bool=False ):
+    def ChatCompletion( self, mesg_list:list[dict], temperature:float=0, stop=None, tools=None, tool_choice=None, *, max_retries=2, read_timeout=60, json_fmt:dict=None ):
         content = None
         try:
+            mesg_list2:list[dict] = mesg_list
             kwargs = {}
             if tools:
                 kwargs['tools'] = tools
             if tool_choice:
                 kwargs['tool_choice'] = tool_choice
-            if json_mode:
+            if isinstance(json_fmt,dict):
                 kwargs['response_format'] = ResponseFormat( type='json_object' )
-            api_logger.debug( "request" + "\n" + json.dumps( mesg_list, indent=2, ensure_ascii=False) )
-            self.notify_log( mesg_list )
+                json_prompt:str = f"JSON format\n {json.dumps(json_fmt,ensure_ascii=False)}"
+                mesg_list2.append( { 'role': 'system', 'content': json_prompt })
+            api_logger.debug( "request" + "\n" + json.dumps( mesg_list2, indent=2, ensure_ascii=False) )
+            self.notify_log( mesg_list2 )
 
             client:OpenAI = get_client()
             client = client.with_options( timeout=Timeout( 60, connect=5.0, write=5.0, read=read_timeout), max_retries=0 )
@@ -245,10 +248,10 @@ class BotCore:
                     response = client.chat.completions.create(
                             model="gpt-3.5-turbo-1106",
                             temperature = temperature,
-                            messages=mesg_list,
+                            messages=mesg_list2,
                             **kwargs
                         )
-#                            request_timeout=(self.connect_timeout,self.read_timeout)
+#                   request_timeout=(self.connect_timeout,self.read_timeout)
                     api_logger.debug( "response" + "\n" + response.model_dump_json(indent=2) )
                     break
                 except (openai.APITimeoutError,openai.RateLimitError,openai.APIConnectionError,ConnectionRefusedError) as ex:
@@ -769,8 +772,16 @@ class BotUtils:
                 return str(a) + str(sep) + str(b)
 
     @staticmethod
+    def str_strip( value:str ) -> str:
+        if value is None:
+            return None
+        else:
+            return str(value).strip()
+
+    @staticmethod
     def is_empty( value ) -> bool:
         return value is None or len(str(value).strip())<=0
+
     @staticmethod
     def strip_message( mesg:str ) -> str:
         while True:

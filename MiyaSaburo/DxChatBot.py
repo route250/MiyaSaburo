@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from DxBotUtils import BotCore, BotUtils, TtsEngine
 from DxBotUI import debug_ui
 
+from openai.types.chat.completion_create_params import ResponseFormat
+
 class ChatState(Enum):
     Init = 0        # 初期状態
     InitBusy = 1        # 初期状態
@@ -27,10 +29,13 @@ class ChatMessage:
     SYSTEM="system"
     AI="AI"
 
-    def __init__( self, role:str, message:str, tm:float=None ):
-        self.role=role
-        self.message=message
-        self.tm = tm if tm is not None and tm>0 else time.time()
+    def __init__( self, role:str, message:str, *, json:dict=None, templeture:float=None, keep:bool=True, tm:float=None ):
+        self.tm:float = tm if tm is not None and tm>0 else time.time()
+        self.role:str =role
+        self.message:str =message
+        self.keep:bool = keep
+        self.templeture:float = templeture
+        self.json:dict =json
 
     def to_prompt(self, *, assistant:str=None, user:str=None):
         r:str = self.role
@@ -55,15 +60,19 @@ class DxChatBot(BotCore):
     
     def __init__(self, *, executor=None):
         super().__init__()
+        # ステータス
         self.chatstate:ChatState = ChatState.Init
         self.api_mode:bool = False
-        self.executor:ThreadPoolExecutor = executor if executor is not None else ThreadPoolExecutor(max_workers=4)
-        self.futures:list[Future] = []
+        self.api_mode = self.set_api_mode(True)
+        # チャットメッセージ
         self.mesg_list:list[ChatMessage]=[]
         self.next_message:ChatMessage = None
         self.last_user_message_time:float = 0
+        # UIへのコールバック
         self.chat_callback = None
-        self.api_mode = self.set_api_mode(True)
+        # スレッド
+        self.executor:ThreadPoolExecutor = executor if executor is not None else ThreadPoolExecutor(max_workers=4)
+        self.futures:list[Future] = []
         # タイマー
         self._tm_timer: threading.Timer = None
         self._tm_last_action: float = 0
@@ -83,6 +92,7 @@ class DxChatBot(BotCore):
                 self._tm_timer.start()
 
     def stop(self) ->None:
+        self.tts_cancel()
         with self.lock:
             try:
                 if self._tm_timer is not None:
@@ -187,12 +197,12 @@ class DxChatBot(BotCore):
         self.update_info( {'api_mode': la } )
         return mode
 
-    def send_message(self, message:str, *, role:str = ChatMessage.USER, bg:bool=True ) -> bool:
+    def send_message(self, message:str, *, role:str = ChatMessage.USER, hide:bool=False, keep:bool=True, templeture:float=None, bg:bool=True ) -> bool:
         self.start()
         with self.lock:
             if self.next_message is not None:
                 return False
-            m:ChatMessage = ChatMessage( role, message )
+            m:ChatMessage = ChatMessage( role, message, keep=keep, templeture=templeture )
             self.next_message = m
             print( f"[DBG]send_message Lock")
             if role == ChatMessage.USER:
@@ -203,7 +213,7 @@ class DxChatBot(BotCore):
             if bg:
                 self.futures.append( self.executor.submit( self.do_chat_talk ) )
         self.tts_cancel()
-        if self.chat_callback is not None and role != ChatMessage.SYSTEM:
+        if self.chat_callback is not None and not hide and role != ChatMessage.SYSTEM:
             self.chat_callback( role, message, 0 )
         if not bg:
             self.do_chat_talk()
@@ -230,17 +240,35 @@ class DxChatBot(BotCore):
         return prompt
     
     def do_chat_talk(self):
+        json_fmt:dict = None
         message: str = None
         try:
             if self.api_mode:
                 message = self.do_chat()
             else:
                 message = self.do_instruct()
-            message = self.message_strip(message)
+            message = BotUtils.str_strip( message )
+            if message is not None:
+                try:
+                    json_fmt = json.loads(message)
+                    self.next_message.json = json_fmt
+                    for key in [ 'serif', 'speak', 'comment', '発言', 'セリフ' ]:
+                        if key in json_fmt:
+                            message = json_fmt.get(key)
+                            break
+                    for key in [ 'topic', '話題' ]:
+                        topic = BotUtils.str_strip( json_fmt.get(key) )
+                        if topic is not None:
+                            self.update_info( {'topic': topic } )
+                            break
+                except:
+                    pass
+
             with self.lock:
-                if self.next_message.role != ChatMessage.SYSTEM:
+                if self.next_message.keep and self.next_message.role != ChatMessage.SYSTEM:
                     self.mesg_list.append( self.next_message )
-                self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, message ) )
+                if message is not None:
+                    self.mesg_list.append( ChatMessage( ChatMessage.ASSISTANT, message ) )
         except Exception as ex:
             traceback.print_exc()
         finally:
@@ -249,7 +277,6 @@ class DxChatBot(BotCore):
                 self.next_message = None
                 if self.chatstate == ChatState.InTalkBusy:
                     self.chatstate = ChatState.InTalkReady
-                    self._tm_count = 1
                     self._tm_last_action = time.time()
         try:
             emotion:int = 0
@@ -290,16 +317,22 @@ class DxChatBot(BotCore):
 
         for m in self.mesg_list:
             message_list.append( m.to_dict() )
+        temperature:float =None
+        json_fmt:dict = None
         if self.next_message is not None:
+            temperature = self.next_message.templeture
+            json_fmt = self.next_message.json
             message_list.append( self.next_message.to_dict() )
 
         postfix = self.create_after_hist_prompt()
         if postfix is not None:
             message_list.append( ChatMessage.create_dict( ChatMessage.SYSTEM, postfix) )
 
-        resss = self.ChatCompletion( message_list )
+        # if json_fmt is None:
+        #     json_fmt = { '考察': '...', 'topic': '...', 'serif': '...'}
+        res_text = self.ChatCompletion( message_list, temperature=temperature, json_fmt=json_fmt)
 
-        return resss
+        return res_text
 
     def message_strip(self, message:str ) -> str:
         message = message.strip()

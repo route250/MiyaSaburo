@@ -39,7 +39,7 @@ class DxEmoChatBot(DxChatBot):
         message_list.append( { 'role': ChatMessage.USER, 'content': prompt} )
 
         print( f"[DBG]EmoPrompt\n{prompt}" )
-        res:str = self.ChatCompletion( message_list, max_retries=0, read_timeout=5.0, json_mode=True )
+        res:str = self.ChatCompletion( message_list, max_retries=0, read_timeout=5.0, json_fmt={} )
         print( f"[DBG]Emo response\n{res}")
 
         new_emo:dict = BotUtils.parse_response( DxEmoChatBot.EMO_FMT, res )
