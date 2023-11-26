@@ -362,8 +362,8 @@ class DxPlanEmoChatBot(DxEmoChatBot):
                 emotion:int = 0
                 if self.tts is not None:
                     self.tts.add_talk( ret, emotion )
-                elif self.chat_callback is not None:
-                    self.chat_callback( ChatMessage.ASSISTANT, ret, emotion )
+                elif self._chat_callback is not None:
+                    self._chat_callback( ChatMessage.ASSISTANT, ret, emotion )
         except:
             traceback.print_exc()
         finally:
@@ -493,8 +493,8 @@ class DxPlanEmoChatBot(DxEmoChatBot):
             emotion:int = 0
             if self.tts is not None:
                 self.tts.add_talk( ret, emotion )
-            elif self.chat_callback is not None:
-                self.chat_callback( ChatMessage.ASSISTANT, ret, emotion )
+            elif self._chat_callback is not None:
+                self._chat_callback( ChatMessage.ASSISTANT, ret, emotion )
         except Exception as ex:
             traceback.print_exc()
         finally:

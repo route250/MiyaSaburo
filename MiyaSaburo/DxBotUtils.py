@@ -1,13 +1,20 @@
 import sys,os,re,time,json,re,copy
-import numpy as np
-import requests
-from requests.adapters import HTTPAdapter
+from pathlib import Path
 import traceback
 import threading
+from threading import Thread, ThreadError
 from concurrent.futures import ThreadPoolExecutor, Future
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import queue
 import datetime
 from zoneinfo import ZoneInfo
+
+import requests
+from requests.adapters import HTTPAdapter
 import httpx
+
+import numpy as np
 import openai
 from openai import OpenAI
 from openai.types import Completion, CompletionChoice, CompletionUsage
@@ -19,14 +26,15 @@ from openai._types import Timeout
 import tiktoken
 from tiktoken.core import Encoding
 from libs.utils import Utils
-import logging
-from logging.handlers import TimedRotatingFileHandler
-import queue
-import threading
 
 from gtts import gTTS
 from io import BytesIO
 import pygame
+
+import speech_recognition as sr
+import vosk
+from vosk import Model, KaldiRecognizer, SpkModel
+import sounddevice as sd
 
 Price = {
     "gpt3.5"
@@ -142,6 +150,15 @@ class BotCore:
             self._before_info_data = copy.deepcopy( self.info_data )
             if self.info_callback is not None:
                 self.info_callback( self.info_data )
+    
+    def setTTS(self, sw:bool = False ):
+        pass
+
+    def set_recg_callback( self, callback=None ) ->None:
+        pass
+
+    def set_recg_autosend( self, sw=False ) ->None:
+        pass
 
     def token_usage( self, response ):
         with self.lock:
@@ -547,6 +564,256 @@ class TtsEngine:
             except Exception as ex:
                 traceback.print_exc()
 
+class RecognizerEngine:
+    def __init__(self):
+        self._callback = None
+        self._running=False
+        self.device=None
+        self.device_info=None
+        self.sample_rate=44100
+        self.sample_width=2
+        self.sample_dtype='int16'
+        self.block_size = int(self.sample_rate*0.2)
+        self.model=None
+        self._wave_queue = queue.Queue()
+        self._ats_queue = queue.Queue()
+        self._in_speek = False
+
+    def set_mic_device(self,device):
+        self.device = device
+
+    def set_vosk_model(self,m):
+        self.model = m
+
+    def set_speek(self, sw:bool=False):
+        self._in_speek=sw
+
+    def list_devices():
+        print(sd.query_devices())
+
+    def start(self):
+        try:
+            self._running = True
+            self.att_thread = Thread( target=self._fn_recognize, daemon=True )
+            self.vosk_thread = Thread( target=self._fn_vosk, daemon=True )
+            self.att_thread.start()
+            self.vosk_thread.start()
+        except:
+            traceback.print_exc()
+            self._running = False
+
+    def stop(self):
+        self._running=False
+        try:
+            if self.vosk_thread:
+                self.vosk_thread.join(1.0)
+        except:
+            traceback.print_exc()
+        try:
+            if self.att_thread:
+                self.att_thread.join(1.0)
+        except:
+            traceback.print_exc()
+
+    def _fn_callback(self,data):
+        if self._callback is not None:
+            self._callback(data)
+        else:
+            print(f"[REG] {data}")
+
+    # googleで音声認識
+    def _fn_recognize(self):
+        try:
+            # google recognizerの設定
+            self.recognizer = sr.Recognizer()
+
+            while self._running:
+                segment,partial_text,spkvect = self._ats_queue.get()
+                if partial_text is None:
+                    break
+                if segment is None:
+                    data = { 'actin': 'partial', 'content': partial_text }
+                    self._fn_callback(data)
+                    continue
+                #------------------------------
+                if spkvect is not None:
+                    if self._in_speek:
+                        # AIが喋っているので、AIか人間か判定しないといけない
+                        pass
+                    else:
+                        # AIが喋ってないから人間の声のはず
+                        pass
+                #------------------------------
+                confidence = 0.0
+                actual_result = None
+                final_text = None
+                try:
+                    buf = bytearray()
+                    for s in segment:
+                        buf += bytearray(s)
+                    # rate 44100 width 2 ja_JP
+                    # buffer <bytearray, len() = 882000> type(buffer) <class 'bytearray'> WIDTH 2 RATE 44100
+                    audio_data = sr.AudioData( buf, self.sample_rate, self.sample_width)
+                    actual_result = self.recognizer.recognize_google(audio_data, language='ja_JP', with_confidence=False, show_all=True )
+                    if isinstance(actual_result,list) and len(actual_result)==0:
+                        print(f"[RECG] ignore {len(segment)}(blks) {partial_text}")
+                        continue
+                    elif isinstance(actual_result, dict) and len(actual_result.get("alternative", []))>0:
+                        if "confidence" in actual_result["alternative"]:
+                            # return alternative with highest confidence score
+                            best_hypothesis = max(actual_result["alternative"], key=lambda alternative: alternative["confidence"])
+                        else:
+                            # when there is no confidence available, we arbitrarily choose the first hypothesis.
+                            best_hypothesis = actual_result["alternative"][0]
+                        if "transcript" in best_hypothesis:
+                            # https://cloud.google.com/speech-to-text/docs/basics#confidence-values
+                            # "Your code should not require the confidence field as it is not guaranteed to be accurate, or even set, in any of the results."
+                            confidence = best_hypothesis.get("confidence", 0.5)
+                            final_text = best_hypothesis["transcript"]
+                    else:
+                        print(f"[RECG] error response {actual_result}")
+                        self._fn_callback( {'action':'error','error': 'invalid response'})
+
+                except sr.exceptions.RequestError as ex:
+                    print(f"[RECG] error response {ex}")
+                    self._fn_callback( {'action':'error','error': f'{ex}'})
+                except Exception as ex:
+                    traceback.print_exc()
+                    self._fn_callback( {'action':'error','error': f'{ex}'})
+
+                if final_text is not None:
+                    self._fn_callback( { 'action':'final','content':final_text} )
+                elif partial_text is not None:
+                    self._fn_callback( { 'action':'abort','content':final_text} )
+        except:
+            traceback.print_exc()
+        self._running = False
+        print(f"[RECG] stop")
+
+    def _fn_wave_callback(self, indata, frames:int, time, status:sd.CallbackFlags):
+        """This is called (from a separate thread) for each audio block."""
+        try:
+            sz:int = self._wave_queue.qsize()
+            if status:
+                print(status, file=sys.stderr)
+            if self._q_full:
+                if self._wave_queue.qsize()==0:
+                    self._q_full=False
+                    self._fn_callback( {'action':'restart'})
+            elif self._wave_queue.qsize()<self._q_limit:
+                self._wave_queue.put(bytes(indata))
+            else:
+                self._fn_callback( {'action':'pause'})
+                self._q_full=True
+        except:
+            pass
+
+    def _fn_vosk(self):
+        try:
+            #------------------------------------------------------------
+            # voskを初期化する
+            #------------------------------------------------------------
+            self.device_info = sd.query_devices(self.device, "input")
+            if self.device_info is None:
+                return
+            if self.device is None:
+                self.device = self.device_info['index']
+            default_rate = int(self.device_info["default_samplerate"])
+            for r in [ 16000, 24000, default_rate ]:
+                try:
+                    sd.check_input_settings( device=self.device, samplerate=r)
+                    self.sample_rate = r
+                    break
+                except:
+                    pass
+            self.sample_width = 2
+            self.dtype = 'int16'
+            self.block_size = int(self.sample_rate * 0.2) # sample_rateが１秒のブロック数に相当するので 0.2秒のブロックサイズにする
+
+            self._q_limit = 5 * 10
+            self._q_full = False
+
+            # voskの設定
+            if self.model is None:
+                self.model = RecognizerEngine.get_vosk_model(lang="ja")
+            else:
+                self.model = Model(lang=self.model)
+            self.vosk: KaldiRecognizer = KaldiRecognizer(self.model, self.sample_rate)
+            spkmodel_path = RecognizerEngine.get_vosk_spk_model()
+            if spkmodel_path is not None:
+                self.vosk.SetSpkModel( spkmodel_path )
+            #------------------------------------------------------------
+            # 検出ループ
+            #------------------------------------------------------------
+            with sd.RawInputStream(samplerate=self.sample_rate, blocksize = self.block_size, device=self.device, dtype=self.dtype, channels=1, callback=self._fn_wave_callback):
+                framebuf = []
+                before_notify=""
+                # 処理ループ
+                while self._running:
+                    try:
+                        frame = self._wave_queue.get(timeout=1.0)
+                    except:
+                        continue
+                    framebuf.append(frame)
+                    send=None
+                    if self.vosk.AcceptWaveform(frame):
+                        res = json.loads( self.vosk.Result() )
+                        txt = BotUtils.NoneToDefault(res.get('text'))
+                        if len(txt)>0:
+                            send = framebuf
+                            framebuf=[]
+                        else:
+                            framebuf.clear()
+                    else:
+                        res = json.loads( self.vosk.PartialResult() )
+                        txt:str = BotUtils.NoneToDefault(res.get('partial'))
+
+                    if send is not None:
+                        print( f"[VOSK] final   {txt}")
+                        before_notify=""
+                        spkvect = res.get('spk')
+                        self._ats_queue.put( (send,txt,spkvect) )
+                    elif txt != before_notify:
+                        print( f"[VOSK] partial {txt}")
+                        before_notify = txt
+                        self._ats_queue.put( (None,txt,None) )
+
+                self._ats_queue.put( (None,None,None) )
+
+        except Exception as e:
+            traceback.print_exc()
+        self._running=False
+        self._ats_queue.put( (None,None,None) )
+
+    @staticmethod
+    def get_vosk_model( lang:str='ja' ) ->Model:
+        for directory in vosk.MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            model_file_list = os.listdir(directory)
+            model_file = [model for model in model_file_list if re.match(rf"vosk-model-{lang}", model)]
+            if model_file != []:
+                return Model(str(Path(directory, model_file[0])))
+        for directory in vosk.MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            model_file_list = os.listdir(directory)
+            model_file = [model for model in model_file_list if re.match(rf"vosk-model-small-{lang}", model)]
+            if model_file != []:
+                return Model(str(Path(directory, model_file[0])))
+        return None
+
+    @staticmethod
+    def get_vosk_spk_model():
+        for directory in vosk.MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            model_file_list = os.listdir(directory)
+            model_file = [model for model in model_file_list if re.match(r"vosk-model-spk-", model)]
+            if model_file != []:
+                return SpkModel(str(Path(directory, model_file[0])))
+        return None
+
 class BotUtils:
 
     @staticmethod
@@ -854,6 +1121,7 @@ class BotUtils:
         return n
 
     # 複数行文字列のインデント
+    @staticmethod
     def str_indent( value:str ) -> str:
         if( value is None ):
             return []
@@ -874,6 +1142,30 @@ class BotUtils:
             if n<left_spc:
                 left_spc=n
         return "\n".join( [ l[left_spc:] for l in lines] )
+
+    @staticmethod
+    def int_or_str(text):
+        """Helper function for argument parsing."""
+        try:
+            return int(text)
+        except ValueError:
+            return text
+
+    @staticmethod
+    def cosine_dist(x, y) ->float:
+        if x is None or y is None:
+            return 0.0
+        nx = np.array(x)
+        ny = np.array(y)
+        return 1 - np.dot(nx, ny) / np.linalg.norm(nx) / np.linalg.norm(ny)
+
+    @staticmethod
+    def NoneToDefault( value, *,default="" ) ->str:
+        if value is not None:
+            svalue = str(value)
+            if len(svalue)>0:
+                return svalue
+        return default
 
 def test():
     a = BotUtils.to_embedding( 'aaaa' )

@@ -10,10 +10,10 @@ from DxEmoChatBot import DxEmoChatBot
 from DxBotUI import debug_ui
 
 next_prompts = [ 
-    '私は今、起動したところです。相手に話しかけてみます。',
-    '相手の反応がないけど、話題を続けましょう。',
-    '相手の反応がないので、違う話題を話してみましょう。',
-    '相手の反応がないので、返事を催促しましょう。'
+    '私は「Userに挨拶しよう」と考えます。',
+    '私は「Userから反応がないので、今の話題を続けよう」と考えます。',
+    '私は「Userから反応を引き出すために、違う話題にしよう」と考えます。',
+    '私は「Userからの反応が無いので、会話を終了しよう」と考えます。'
 ]
 
 class DxPlanEmoChatBot2(DxEmoChatBot):
@@ -35,7 +35,7 @@ class DxPlanEmoChatBot2(DxEmoChatBot):
                 idx = (count-1) % n + 1
                 prompt = next_prompts[idx]
         elif after == ChatState.ShortBreakBusy:
-            prompt = "相手の反応がないので、会話をおわらせましょう。"
+            prompt = "私は「Userからの反応が無いので、会話を終了しよう」と考えます。"
         elif after == ChatState.LongBreakBusy:
             prompt = None
 
