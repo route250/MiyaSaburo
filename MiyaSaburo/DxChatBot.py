@@ -184,8 +184,10 @@ class DxChatBot(BotCore):
             self.tts = None
     
     def _fn_tts_callback(self, text:str, emotion:int, tts_model:str ):
-        if self._chat_callback is not None:
-            self._chat_callback( ChatMessage.ASSISTANT, text, emotion, tts_model )
+        self.att_set_speek( text )
+        if text is not None:
+            if self._chat_callback is not None:
+                self._chat_callback( ChatMessage.ASSISTANT, text, emotion, tts_model )
 
     def tts_cancel(self) -> None:
         if self.tts is not None:
@@ -217,9 +219,9 @@ class DxChatBot(BotCore):
     def set_recg_autosend( self, sw=False ) ->None:
         self._recg_autosend = sw
 
-    def att_set_speek(self, sw:bool=False ):
+    def att_set_speek(self, text:str=None ):
         if self.att is not None:
-            self.att.set_speek(sw)
+            self.att.set_speek(text)
     
     def submit_task(self, func ) -> Future:
         return self.executor.submit( func )

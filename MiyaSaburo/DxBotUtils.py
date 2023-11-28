@@ -1,4 +1,5 @@
-import sys,os,re,time,json,re,copy
+import sys,os,re,time,json,re,copy,math
+import unicodedata
 from pathlib import Path
 import traceback
 import threading
@@ -446,6 +447,7 @@ class TtsEngine:
                 headers=headers
             )
             model:str = TtsEngine.id_to_name(self.speaker)
+            # wave形式 デフォルトは24kHz
             return res.content, model
         except requests.exceptions.ConnectTimeout as ex:
             print( f"[VOICEVOX] {type(ex)} {ex}")
@@ -463,6 +465,7 @@ class TtsEngine:
         try:
             self._disable_gtts = 0
             tts = gTTS(text=text, lang=lang,lang_check=False )
+            # gTTSはmp3で返ってくる
             with BytesIO() as buffer:
                 tts.write_to_fp(buffer)
                 wave:bytes = buffer.getvalue()
@@ -501,6 +504,7 @@ class TtsEngine:
                 response_format="mp3",
                 input=text
             )
+            # openaiはmp3で返ってくる
             return response.content,"OpenAI"
         except requests.exceptions.ConnectTimeout as ex:
             print( f"[gTTS] timeout")
@@ -560,9 +564,29 @@ class TtsEngine:
                                 pygame.mixer.music.stop()
                                 break
                             time.sleep(0.2)
+                    if self.start_call is not None:
+                        self.start_call( None, emotion, tts_model )
                     
             except Exception as ex:
                 traceback.print_exc()
+class VectList:
+    def __init__(self,num=10):
+        self._list = []
+        self._max = 10
+        self._idx = 0
+    def put( self, vector ):
+        if vector is not None:
+            if len( self._list) < self._max:
+                self._list.append(vector)
+            else:
+                self._list[self._idx] = vector
+                self._idx = (self._idx+1) % self._max
+    def length(self):
+        return len(self._list)
+    def min_dist( self, vector ):
+        return min( np.linalg.norm( vector- a) for a in self._list) if self._list else sys.float_info.max
+    def max( self, vector ):
+        return max(BotUtils.cosine_dist( vector, a) for a in self._list) if self._list else 0
 
 class RecognizerEngine:
     def __init__(self):
@@ -577,7 +601,7 @@ class RecognizerEngine:
         self.model=None
         self._wave_queue = queue.Queue()
         self._ats_queue = queue.Queue()
-        self._in_speek = False
+        self._in_speek = None
 
     def set_mic_device(self,device):
         self.device = device
@@ -585,8 +609,8 @@ class RecognizerEngine:
     def set_vosk_model(self,m):
         self.model = m
 
-    def set_speek(self, sw:bool=False):
-        self._in_speek=sw
+    def set_speek(self, text:str=None):
+        self._in_speek=text
 
     def list_devices():
         print(sd.query_devices())
@@ -626,23 +650,53 @@ class RecognizerEngine:
         try:
             # google recognizerの設定
             self.recognizer = sr.Recognizer()
-
+            ai_vects = VectList(10)
+            user_vects = VectList(10)
+            noize_vects = VectList(10)
             while self._running:
-                segment,partial_text,spkvect = self._ats_queue.get()
+                segment,partial_text,spkvect0, in_speek = self._ats_queue.get()
                 if partial_text is None:
                     break
+                if partial_text == 'ん':
+                    continue
                 if segment is None:
                     data = { 'actin': 'partial', 'content': partial_text }
                     self._fn_callback(data)
                     continue
                 #------------------------------
-                if spkvect is not None:
-                    if self._in_speek:
-                        # AIが喋っているので、AIか人間か判定しないといけない
-                        pass
+                spkvect = None
+                if spkvect0 is not None:
+                    spkvect = np.array(spkvect0)
+                    if in_speek:
+                        if ai_vects.length()>=3 and user_vects.length()>=3:
+                            # AI発話中でデータが揃っている
+                            ai = ai_vects.min_dist( spkvect )
+                            us = user_vects.min_dist( spkvect )
+                            if ai<us:
+                                # AIのほうが近いので、AIとみなす
+                                data = { 'actin': 'partial', 'content': '' }
+                                self._fn_callback(data)
+                                print( f"[RECOG] AI cancel {partial_text}")
+                                continue
+                            if noize_vects.length()>=3:
+                                nz = noize_vects.min_dist( spkvect )
+                                if nz<us:
+                                    # ノイズのほうが近いので、AIとみなす
+                                    data = { 'actin': 'partial', 'content': '' }
+                                    self._fn_callback(data)
+                                    print( f"[RECOG] Noize cancel {partial_text}")
+                                    continue
                     else:
-                        # AIが喋ってないから人間の声のはず
-                        pass
+                        if noize_vects.length()>=3 and user_vects.length()>=3:
+                            us = user_vects.min_dist( spkvect )
+                            nz = noize_vects.min_dist( spkvect )
+                            if nz<us:
+                                # ノイズのほうが近いので、AIとみなす
+                                data = { 'actin': 'partial', 'content': '' }
+                                self._fn_callback(data)
+                                print( f"[RECOG] Noize cancel {partial_text}")
+                                continue
+
                 #------------------------------
                 confidence = 0.0
                 actual_result = None
@@ -657,6 +711,8 @@ class RecognizerEngine:
                     actual_result = self.recognizer.recognize_google(audio_data, language='ja_JP', with_confidence=False, show_all=True )
                     if isinstance(actual_result,list) and len(actual_result)==0:
                         print(f"[RECG] ignore {len(segment)}(blks) {partial_text}")
+                        self._fn_callback( { 'action':'abort','content':''} )
+                        noize_vects.put(spkvect)
                         continue
                     elif isinstance(actual_result, dict) and len(actual_result.get("alternative", []))>0:
                         if "confidence" in actual_result["alternative"]:
@@ -670,6 +726,37 @@ class RecognizerEngine:
                             # "Your code should not require the confidence field as it is not guaranteed to be accurate, or even set, in any of the results."
                             confidence = best_hypothesis.get("confidence", 0.5)
                             final_text = best_hypothesis["transcript"]
+                            # ToDo AIが喋った内容と一致したらAIにしなくては
+                            if not in_speek:
+                                if len(final_text)>3:
+                                    user_vects.put(spkvect)
+                            else:
+                                # AI発声中
+                                if len(final_text)<5:
+                                    print( f"[RECOG] AI short {final_text}")
+                                    self._fn_callback( { 'action':'abort','content':''} )
+                                    continue
+                                #------------------------------
+                                # AIの発話中でAIのベクトルが貯まるまでは識別しない
+                                if ai_vects.length()<3:
+                                    print( f"[RECOG] AI skip{ai_vects.length()} {final_text}")
+                                    self._fn_callback( { 'action':'abort','content':''} )
+                                    if len(final_text)>5:
+                                        ai_vects.put( spkvect )
+                                    continue
+                                #------------------------------
+                                ai_ngram:Ngram = Ngram(in_speek)
+                                recg_ngram:Ngram = Ngram(final_text)
+                                sim: float = ai_ngram.similarity(recg_ngram)
+                                if sim>0.9:
+                                    # AIと判定した
+                                    ai_vects.put(spkvect)
+                                    data = { 'actin': 'partial', 'content': '' }
+                                    self._fn_callback(data)
+                                    print( f"[RECOG] AI Ngram {partial_text}")
+                                    continue
+                                # else:
+                                #     print( f"[RECG] ai??? {final_text} ? {in_speek}" )
                     else:
                         print(f"[RECG] error response {actual_result}")
                         self._fn_callback( {'action':'error','error': 'invalid response'})
@@ -701,7 +788,7 @@ class RecognizerEngine:
                     self._q_full=False
                     self._fn_callback( {'action':'restart'})
             elif self._wave_queue.qsize()<self._q_limit:
-                self._wave_queue.put(bytes(indata))
+                self._wave_queue.put( (bytes(indata), self._in_speek) )
             else:
                 self._fn_callback( {'action':'pause'})
                 self._q_full=True
@@ -748,22 +835,36 @@ class RecognizerEngine:
             with sd.RawInputStream(samplerate=self.sample_rate, blocksize = self.block_size, device=self.device, dtype=self.dtype, channels=1, callback=self._fn_wave_callback):
                 framebuf = []
                 before_notify=""
+                before_in_speek=None
+                in_speek:str = None
                 # 処理ループ
                 while self._running:
                     try:
-                        frame = self._wave_queue.get(timeout=1.0)
+                        frame, frame_in_speek = self._wave_queue.get(timeout=1.0)
                     except:
                         continue
                     framebuf.append(frame)
+                    if frame_in_speek:
+                        if in_speek is None:
+                            in_speek = frame_in_speek
+                            before_in_speek = frame_in_speek
+                        elif before_in_speek != frame_in_speek:
+                            in_speek += frame_in_speek
+                    else:
+                        before_in_speek = ""
                     send=None
+                    send_text=None
                     if self.vosk.AcceptWaveform(frame):
                         res = json.loads( self.vosk.Result() )
                         txt = BotUtils.NoneToDefault(res.get('text'))
-                        if len(txt)>0:
+                        if len(txt)>1:
                             send = framebuf
                             framebuf=[]
+                            send_text = in_speek
                         else:
                             framebuf.clear()
+                        in_speek = None
+                        before_in_speek = None
                     else:
                         res = json.loads( self.vosk.PartialResult() )
                         txt:str = BotUtils.NoneToDefault(res.get('partial'))
@@ -772,11 +873,11 @@ class RecognizerEngine:
                         print( f"[VOSK] final   {txt}")
                         before_notify=""
                         spkvect = res.get('spk')
-                        self._ats_queue.put( (send,txt,spkvect) )
+                        self._ats_queue.put( (send,txt,spkvect, send_text) )
                     elif txt != before_notify:
                         print( f"[VOSK] partial {txt}")
                         before_notify = txt
-                        self._ats_queue.put( (None,txt,None) )
+                        self._ats_queue.put( (None,txt,None,None) )
 
                 self._ats_queue.put( (None,None,None) )
 
@@ -1009,6 +1110,15 @@ class BotUtils:
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
     @staticmethod
+    def cosine_dist(x, y) ->float:
+        if x is None or y is None:
+            return 0.0
+        nx = np.array(x)
+        ny = np.array(y)
+        return 1 - np.dot(nx, ny) / np.linalg.norm(nx) / np.linalg.norm(ny)
+
+
+    @staticmethod
     def get_queue( queue:queue.Queue ):
         try:
             return queue.get_nowait()
@@ -1152,20 +1262,53 @@ class BotUtils:
             return text
 
     @staticmethod
-    def cosine_dist(x, y) ->float:
-        if x is None or y is None:
-            return 0.0
-        nx = np.array(x)
-        ny = np.array(y)
-        return 1 - np.dot(nx, ny) / np.linalg.norm(nx) / np.linalg.norm(ny)
-
-    @staticmethod
     def NoneToDefault( value, *,default="" ) ->str:
         if value is not None:
             svalue = str(value)
             if len(svalue)>0:
                 return svalue
         return default
+
+class Ngram:
+    def __init__( self, text:str, N:int=2 ):
+        self._text = text
+        strip_text = Ngram._ngrams_preprocess_txt(text)
+        N_gram_vec={}
+        for i in range(len(strip_text)-N+1):
+            t = strip_text[i:i+N]
+            if t in N_gram_vec.keys():
+                N_gram_vec[t]+=1
+            else:
+                N_gram_vec[t]=1
+        self._vect = N_gram_vec
+
+    def similarity( self, ngram2:'Ngram' ) ->float:
+        return Ngram.cosine_similarity( self, ngram2 )
+
+    @staticmethod
+    def _ngrams_preprocess_txt( text:str ):
+        # 句読点の除去
+        text = re.sub(r'[、。？?！! 　]', '', text)
+        # 英数字を半角に変換
+        text = unicodedata.normalize("NFKC", text)
+        return text
+
+    @staticmethod
+    def cosine_similarity( ngram1:'Ngram', ngram2:'Ngram' ) ->float:
+        vec1:dict = ngram1._vect
+        vec2:dict = ngram2._vect
+        # ベクトル間のコサイン類似度を計算
+        intersection = set(vec1.keys()) & set(vec2.keys())
+        numerator = sum([vec1[x] * vec2[x] for x in intersection])
+
+        norm1 = math.sqrt( sum([vec1[x]**2 for x in vec1.keys()]) )
+        norm2 = math.sqrt( sum([vec2[x]**2 for x in vec2.keys()]) )
+        denominator = norm1 * norm2
+
+        if not denominator:
+            return 0.0
+        else:
+            return float(numerator) / denominator
 
 def test():
     a = BotUtils.to_embedding( 'aaaa' )
