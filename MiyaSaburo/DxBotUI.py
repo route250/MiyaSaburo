@@ -2,12 +2,14 @@ import sys,os,json
 import queue
 import traceback
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk,Menu
 from tkinter import scrolledtext
 from tkinter.scrolledtext import ScrolledText
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 from DxBotUtils import BotCore, BotUtils
 
-def exp_ui( root, parent, bot:BotCore ):
+def exp_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
     def create_prompt():
         try:
             fmt_txt = input_2.get('1.0', tk.END)
@@ -80,9 +82,7 @@ def exp_ui( root, parent, bot:BotCore ):
     parent.grid_rowconfigure(2, weight=0)
     parent.grid_rowconfigure(3, weight=2)
 
-def chat_ui( root, parent, bot:BotCore ):
-    # キューの作成
-    update_queue = queue.Queue()
+def chat_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
 
     att_opts=['No Mic', 'Recog', 'Recog&Send']
     selected_att = tk.StringVar()
@@ -90,24 +90,6 @@ def chat_ui( root, parent, bot:BotCore ):
     tts_opts=['No talk', 'VOICE BOX', 'OpenAI']
     selected_tts = tk.StringVar()
     selected_tts.set(tts_opts[0])
-
-    def _x_fn_recg_callback( content:str ):
-        recg_textarea.delete('1.0',tk.END)
-        if content is not None and len(content)>0:
-            recg_textarea.insert(tk.END,content)
-
-    def _fn_att_chenged(value):
-        if value == att_opts[1] or value == att_opts[2]:
-            bot.set_recg_callback( lambda content: update_queue.put( (_x_fn_recg_callback,{'content':content})) )
-            bot.set_recg_autosend( value == att_opts[2] )
-        else:
-            bot.set_recg_callback( None )
-
-    def _fn_tts_chenged(value):
-        if value == tts_opts[1]:
-            bot.setTTS(True)
-        else:
-            bot.setTTS(False)
 
     # 分割
     HSplit:tk.PanedWindow = tk.PanedWindow( parent, orient='horizontal', sashwidth=8 )
@@ -123,10 +105,12 @@ def chat_ui( root, parent, bot:BotCore ):
     send_textarea:ScrolledText = ScrolledText(input_frame, height=3)
     send_textarea.pack( expand=True, fill='both')
     btn_frame = tk.Frame( input_frame)
-    s1end_button = tk.OptionMenu(btn_frame, selected_att, *att_opts, command=_fn_att_chenged )
-    s1end_button.pack( side=tk.LEFT, expand=False, fill='none' )
-    s2end_button = tk.OptionMenu(btn_frame, selected_tts, *tts_opts, command=_fn_tts_chenged )
-    s2end_button.pack( side=tk.LEFT, expand=False, fill='none' )
+    recg_menu:ttk.Combobox = ttk.Combobox(btn_frame, values=att_opts, state='readonly' )
+    recg_menu.set(att_opts[0])
+    recg_menu.pack( side=tk.LEFT, expand=False, fill='none' )
+    tts_menu:ttk.Combobox = ttk.Combobox(btn_frame, values=tts_opts, state='readonly' )
+    tts_menu.set(tts_opts[0])
+    tts_menu.pack( side=tk.LEFT, expand=False, fill='none' )
     send_button = tk.Button(btn_frame, text=">>")
     send_button.pack( side=tk.RIGHT, expand=False, fill='none' )
     btn_frame.pack( expand=False, fill='x' )
@@ -150,9 +134,19 @@ def chat_ui( root, parent, bot:BotCore ):
     log_textarea.pack( expand=True, fill='both' )
     log_tab.pack( expand=True, fill='both' )
 
+    # タブ2のフレームを作成
+    spk_plot_tab = ttk.Frame(right_panel)
+    spk_plot_fig = Figure(figsize=(5,5))
+    ax = spk_plot_fig.add_subplot(111)
+    canvas = FigureCanvasTkAgg(spk_plot_fig, master=spk_plot_tab)
+    canvas_widget = canvas.get_tk_widget()
+    canvas_widget.pack( expand=True, fill='both' )
+    spk_plot_tab.pack( expand=True, fill='both' )
+
     # タブをNotebookに追加
     right_panel.add(info_tab, text='Info')
     right_panel.add(log_tab, text='Log')
+    right_panel.add(spk_plot_tab, text='Voice')
 
     right_panel.pack( fill='both' )
 
@@ -163,6 +157,39 @@ def chat_ui( root, parent, bot:BotCore ):
     HSplit.add( left_frame, stretch='first' )
     HSplit.add( right_panel )
     HSplit.pack( expand=True, fill='both' )
+
+    def _x_fn_recg_callback( content:str ):
+        recg_textarea.delete('1.0',tk.END)
+        if content is not None and len(content)>0:
+            recg_textarea.insert(tk.END,content)
+
+    def _x_fn_plot2d( spk_2d, colors ) :
+        print( f"[GUI]plot_spk2d")
+        ax.clear()
+        ax.scatter(spk_2d[:, 0], spk_2d[:, 1],c=colors)
+        canvas.draw()    
+
+    def _fn_att_chenged(ev):
+        value = recg_menu.get()
+        if value == att_opts[1] or value == att_opts[2]:
+            bot.set_recg_callback(
+                lambda content: update_queue.put( (_x_fn_recg_callback,{'content':content}) ),
+                lambda spk2d, colors : update_queue.put( ( _x_fn_plot2d, {'spk_2d':spk2d,'colors':colors} ) )
+            )
+            bot.set_recg_autosend( value == att_opts[2] )
+        else:
+            bot.set_recg_callback( None )
+
+    recg_menu.bind("<<ComboboxSelected>>", _fn_att_chenged )
+
+    def _fn_tts_chenged(ev):
+        value = tts_menu.get()
+        if value == tts_opts[1]:
+            bot.setTTS(True)
+        else:
+            bot.setTTS(False)
+
+    tts_menu.bind("<<ComboboxSelected>>", _fn_tts_chenged )
 
     def clear_send_text():
         send_textarea.focus()
@@ -210,24 +237,9 @@ def chat_ui( root, parent, bot:BotCore ):
 
     bot.log_callback = lambda message: update_log(message)
 
-    # GUIを更新するためにメインスレッドで定期的に呼び出される関数
-    def check_queue():
-        try:
-            try:
-                while not update_queue.empty():
-                    func,kwargs = update_queue.get_nowait()
-                    func(**kwargs)  # ラムダ式や関数を実行する
-            except:
-                traceback.print_exc()
-            bot.timer_task()
-        finally:
-            # 100ms後に再度この関数を呼び出す
-            root.after(100, lambda: check_queue() )
-    check_queue()
-
-    bot.start()
-
 def debug_ui( bot: BotCore ):
+    # キューの作成
+    update_queue = queue.Queue()
 
     # GUIを作成する
     root = tk.Tk()
@@ -253,13 +265,35 @@ def debug_ui( bot: BotCore ):
     notebook.add(frame2, text='Exp')
 
     # タブ1の内容
-    chat_ui( root, frame1, bot )
+    chat_ui( update_queue, root, frame1, bot )
 
     # タブ2の内容
-    exp_ui( root, frame2, bot )
+    exp_ui( update_queue, root, frame2, bot )
 
     root.grid_columnconfigure(0, weight=10)
     root.grid_rowconfigure(0, weight=10)
+
+    # GUIを更新するためにメインスレッドで定期的に呼び出される関数
+    abort = False
+    def check_queue():
+        if abort:
+            return
+        try:
+            try:
+                while not update_queue.empty():
+                    func,kwargs = update_queue.get_nowait()
+                    func(**kwargs)  # ラムダ式や関数を実行する
+            except:
+                traceback.print_exc()
+            bot.timer_task()
+        finally:
+            # 100ms後に再度この関数を呼び出す
+            root.after(100, lambda: check_queue() )
+    check_queue()
+
+    bot.start()
     # メインループ
     root.mainloop()
+    print(f"EXIT {root.state}" )
+    abort=True
     bot.stop()

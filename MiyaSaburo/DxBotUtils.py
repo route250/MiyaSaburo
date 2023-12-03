@@ -10,7 +10,8 @@ from logging.handlers import TimedRotatingFileHandler
 import queue
 import datetime
 from zoneinfo import ZoneInfo
-
+import heapq
+from collections import Counter
 import requests
 from requests.adapters import HTTPAdapter
 import httpx
@@ -36,6 +37,8 @@ import speech_recognition as sr
 import vosk
 from vosk import Model, KaldiRecognizer, SpkModel
 import sounddevice as sd
+
+from sklearn.decomposition import PCA
 
 Price = {
     "gpt3.5"
@@ -145,6 +148,9 @@ class BotCore:
         except:
             traceback.print_exc()
 
+    def set_chat_callback( self, chat_callback=None ) ->None:
+        pass
+
     def update_info( self, data:dict ) -> None:
         BotUtils.update_dict( data, self.info_data )
         if not self.info_data == self._before_info_data:
@@ -155,7 +161,7 @@ class BotCore:
     def setTTS(self, sw:bool = False ):
         pass
 
-    def set_recg_callback( self, callback=None ) ->None:
+    def set_recg_callback( self, recg_callback=None, plot_callback=None ) ->None:
         pass
 
     def set_recg_autosend( self, sw=False ) ->None:
@@ -566,28 +572,112 @@ class TtsEngine:
                             time.sleep(0.2)
                     if self.start_call is not None:
                         self.start_call( None, emotion, tts_model )
+                    time.sleep(0.5)
                     
             except Exception as ex:
                 traceback.print_exc()
 class VectList:
     def __init__(self,num=10):
-        self._list = []
-        self._max = 10
-        self._idx = 0
-    def put( self, vector ):
+        self._list:np.ndarray = np.empty((0,0))
+        self._maxlength = num
+        self._last_idx = -1
+        # 平均と標準偏差
+        self._mean:np.ndarray = None
+        self._std:np.ndarray = None
+        self._center:np.ndarray = None
+    # 追加する
+    def put( self, vector:np.ndarray ):
         if vector is not None:
-            if len( self._list) < self._max:
-                self._list.append(vector)
+            if len(self._list)>self._maxlength:
+                # 上限を超えたので上書き
+                self._last_idx = (self._last_idx+1) % self._maxlength
+                self._list[self._last_idx] = vector
+            elif len(self._list) >0:
+                # 上限以下なので追加
+                self._last_idx = len( self._list )
+                self._list = np.concatenate( (self._list,vector.reshape((1,-1))), axis=0 )
             else:
-                self._list[self._idx] = vector
-                self._idx = (self._idx+1) % self._max
+                # 初期化
+                self._last_idx = 0
+                self._list = vector.reshape(1,-1)
+            self._mean = None
+            self._std = None
+            self._center = None
+    # 個数
     def length(self):
         return len(self._list)
+    def __len__(self):
+        return len(self._list)
+    
+    # 平均と標準偏差を求める
+    def _calc(self):
+        if len(self._list) == 0:
+            return
+        if len(self._list) == 1:
+            self._center = self._list[0]
+            self._radius = 0
+            return
+        # 平均
+        mean = np.mean(self._list, axis=0)
+        # 標準偏差
+        std = np.std(self._list, axis=0)
+
+        # 各ベクトルが3シグマ以内にあるかどうかをベクトル全体として評価
+        std3 = 3 * std
+        filtered = np.array([v for v in self._list if np.linalg.norm(v - mean) < np.linalg.norm(std3)])
+
+        # filteredの平均を中心として計算
+        center = np.mean(filtered, axis=0)
+
+        # 中心からの距離（半径）のリスト
+        delta_list = filtered - center
+        radius_list = np.linalg.norm(delta_list, axis=1)
+
+        # 最大半径の計算
+        max_radius = np.max(radius_list)
+
+        self._mean = mean
+        self._std = std
+        self._center = center
+        self._radius = max_radius
+
+    def mean(self)->np.ndarray:
+        if( self._mean is None ):
+            self._calc()
+        return self._mean
+
+    def std(self)->np.ndarray:
+        if( self._std is None ):
+            self._calc()
+        return self._std
+    
+    def center(self) ->np.ndarray:
+        if( self._center is None):
+            self._calc()
+        return self._center
+
+    def is_match( self, vect:np.ndarray ) ->bool:
+        center = self.center()
+        if center is None or self._radius is None:
+            return False
+        r = np.linalg.norm( vect - center )
+        return r < self._radius
+
     def min_dist( self, vector ):
         return min( np.linalg.norm( vector- a) for a in self._list) if self._list else sys.float_info.max
     def max( self, vector ):
         return max(BotUtils.cosine_dist( vector, a) for a in self._list) if self._list else 0
 
+SPK_DIM=128
+SPK_LEN=5
+SPK_NOIZE=0
+SPK_USER_OR_NOIZE=1
+SPK_USER=2
+SPK_USER_OR_AI=3
+SPK_AI=4
+SPK_NN=15
+COLORMAP1=[ '#888888', '#008888', '#ff8888', '#ff88ff', '#8888ff']
+COLORMAP2=[ '#000000', '#00ffff', '#ff0000', '#ff00ff', '#0000ff']
 class RecognizerEngine:
     def __init__(self):
         self._callback = None
@@ -601,7 +691,12 @@ class RecognizerEngine:
         self.model=None
         self._wave_queue = queue.Queue()
         self._ats_queue = queue.Queue()
+        self._pca_queue = queue.Queue()
         self._in_speek = None
+        # Spk分類用
+        self._spk_veclist = [ VectList(SPK_NN) for _ in range(SPK_LEN)]
+        self._spklen = [ 0 for _ in range(5)]
+        self._pca = PCA(n_components=2)
 
     def set_mic_device(self,device):
         self.device = device
@@ -618,8 +713,10 @@ class RecognizerEngine:
     def start(self):
         try:
             self._running = True
+            self._pca_thread = Thread( target=self._fn_pca, daemon=True )
             self.att_thread = Thread( target=self._fn_recognize, daemon=True )
             self.vosk_thread = Thread( target=self._fn_vosk, daemon=True )
+            self._pca_thread.start()
             self.att_thread.start()
             self.vosk_thread.start()
         except:
@@ -628,6 +725,11 @@ class RecognizerEngine:
 
     def stop(self):
         self._running=False
+        try:
+            if self._pca_thread:
+                self._pca_thread.join(1.0)
+        except:
+            traceback.print_exc()
         try:
             if self.vosk_thread:
                 self.vosk_thread.join(1.0)
@@ -645,16 +747,81 @@ class RecognizerEngine:
         else:
             print(f"[REG] {data}")
 
+    def _add_spkvect( self, grp, spkvect:np.ndarray ) ->None:
+        if spkvect is not None and len(spkvect)==SPK_DIM:
+            self._spk_veclist[grp].put( spkvect )
+        else:
+            print(f"[ERROR] raw_spkvect None or invalid dim")
+
+    def _spk_veclen( self, grp ) ->int:
+        return len(self._spk_veclist[grp])
+
+    def _len_spkvect( self, grp ) ->int:
+        return self._spklen[grp]
+
+    def _spk_ismatch( self, grp, spkvect:np.ndarray, default:bool=None ) ->bool:
+        vect_list:VectList = self._spk_veclist[grp]
+        if vect_list is None or len(vect_list)<3:
+            return default
+        else:
+            return vect_list.is_match(spkvect)
+
+    def _spk_update(self, temp_vector:np.ndarray=None) ->None:
+        #分類用にベクトルを結合する
+        allvec = np.concatenate( [ v._list for v in self._spk_veclist if len(v)>0], axis=0 )
+        #分類用にベクトルを結合する
+        all_colors = []
+        for grp, vect in enumerate(self._spk_veclist):
+            if vect:
+                color = COLORMAP1[grp]
+                all_colors += [color] * (len(vect)-1)
+                all_colors.append( COLORMAP2[grp] )
+        if temp_vector is not None:
+            if len(temp_vector)==128:
+                allvec = np.concatenate( [allvec, temp_vector.reshape(1,-1)], axis=1 )
+                all_colors.append( '#ffff00' )
+            else:
+                print(f"[ERROR] raw_spkvect len:{len(temp_vector)}")
+        if len(allvec)>2:
+            self._pca_queue.put( (allvec, all_colors) )
+
+    def _fn_pca(self):
+        try:
+            # 処理ループ
+            while self._running:
+                try:
+                    all_vectors:np.ndarray
+                    all_vectors, all_colors = self._pca_queue.get(timeout=1.0)
+                    if self._pca_queue.qsize()>0:
+                        continue
+                except:
+                    continue
+                try:
+                    # ベクトルを２次元に投影する
+                    print(f"[PCA] start")
+                    st = time.time()
+                    all_2d = self._pca.fit_transform(all_vectors)
+                    for grp in range(5):
+                        self._spklen[grp] = len( self._spk_veclist[grp] )
+                    ed = time.time()
+                    print(f"[PCA] end len:{len(all_vectors)} time:{ed-st}(sec)")
+                    self._fn_callback( { 'spk2d':all_2d, 'colors':all_colors } )
+                except:
+                    traceback.print_exc()
+        except:
+            pass
+
     # googleで音声認識
     def _fn_recognize(self):
         try:
             # google recognizerの設定
             self.recognizer = sr.Recognizer()
-            ai_vects = VectList(10)
-            user_vects = VectList(10)
-            noize_vects = VectList(10)
+            NN=100
+            partial_text:str = None
+            spkvect: np.ndarray = None
+            in_speek:str = None
             while self._running:
-                segment,partial_text,spkvect0, in_speek = self._ats_queue.get()
+                segment,partial_text,spkvect, in_speek = self._ats_queue.get()
                 if partial_text is None:
                     break
                 if partial_text == 'ん':
@@ -664,38 +831,70 @@ class RecognizerEngine:
                     self._fn_callback(data)
                     continue
                 #------------------------------
-                spkvect = None
-                if spkvect0 is not None:
-                    spkvect = np.array(spkvect0)
+                if spkvect is not None:
+                    if len(spkvect)!=128:
+                        print(f"[ERROR] raw_spkvect len:{len(spkvect)}")
+
                     if in_speek:
-                        if ai_vects.length()>=3 and user_vects.length()>=3:
-                            # AI発話中でデータが揃っている
-                            ai = ai_vects.min_dist( spkvect )
-                            us = user_vects.min_dist( spkvect )
-                            if ai<us:
-                                # AIのほうが近いので、AIとみなす
+                        if not self._spk_ismatch( SPK_USER, spkvect, False ):
+                            self._add_spkvect( SPK_AI, spkvect )
+                            if self._spk_veclen( SPK_AI )<10:
                                 data = { 'actin': 'partial', 'content': '' }
                                 self._fn_callback(data)
-                                print( f"[RECOG] AI cancel {partial_text}")
+                                print( f"[RECOG] PreCancel AI<10 in speek {partial_text}")
                                 continue
-                            if noize_vects.length()>=3:
-                                nz = noize_vects.min_dist( spkvect )
-                                if nz<us:
-                                    # ノイズのほうが近いので、AIとみなす
-                                    data = { 'actin': 'partial', 'content': '' }
-                                    self._fn_callback(data)
-                                    print( f"[RECOG] Noize cancel {partial_text}")
-                                    continue
+                            if self._spk_ismatch( SPK_AI, False ):
+                                data = { 'actin': 'partial', 'content': '' }
+                                self._fn_callback(data)
+                                print( f"[RECOG] PreCancel AI in speek {partial_text}")
+                                continue
+                        print( f"[RECOG] PreCancel Interrupt in speek {partial_text}")
                     else:
-                        if noize_vects.length()>=3 and user_vects.length()>=3:
-                            us = user_vects.min_dist( spkvect )
-                            nz = noize_vects.min_dist( spkvect )
-                            if nz<us:
-                                # ノイズのほうが近いので、AIとみなす
+                        if self._spk_ismatch( SPK_NOIZE, spkvect ):
+                            if not self._spk_ismatch( SPK_USER, spkvect ):
                                 data = { 'actin': 'partial', 'content': '' }
                                 self._fn_callback(data)
-                                print( f"[RECOG] Noize cancel {partial_text}")
+                                print( f"[RECOG] PreCandel Noize {partial_text}")
                                 continue
+
+                    # xgrp = self._spk_prediction( spkvect )
+                    # if xgrp == SPK_AI:
+                    #     # AIのほうが近いので、AIとみなす
+                    #     data = { 'actin': 'partial', 'content': '' }
+                    #     self._fn_callback(data)
+                    #     print( f"[RECG] AI cancel {partial_text}")
+                    #     continue
+
+                    #------------------------------
+                    #if in_speek:
+                        #if ai_vects.length()>=3 and user_vects.length()>=3:
+                            # AI発話中でデータが揃っている
+                            # ai = ai_vects.min_dist( spkvect )
+                            # us = user_vects.min_dist( spkvect )
+                            # if ai<us:
+                            #     # AIのほうが近いので、AIとみなす
+                            #     data = { 'actin': 'partial', 'content': '' }
+                            #     self._fn_callback(data)
+                            #     print( f"[RECOG] AI cancel {partial_text}")
+                            #     continue
+                            # if noize_vects.length()>=3:
+                            #     nz = noize_vects.min_dist( spkvect )
+                            #     if nz<us:
+                            #         # ノイズのほうが近いので、AIとみなす
+                            #         data = { 'actin': 'partial', 'content': '' }
+                            #         self._fn_callback(data)
+                            #         print( f"[RECOG] Noize cancel {partial_text}")
+                            #         continue
+                    #else:
+                        # if noize_vects.length()>=3 and user_vects.length()>=3:
+                        #     us = user_vects.min_dist( spkvect )
+                        #     nz = noize_vects.min_dist( spkvect )
+                        #     if nz<us:
+                        #         # ノイズのほうが近いので、AIとみなす
+                        #         data = { 'actin': 'partial', 'content': '' }
+                        #         self._fn_callback(data)
+                        #         print( f"[RECOG] Noize cancel {partial_text}")
+                        #         continue
 
                 #------------------------------
                 confidence = 0.0
@@ -710,9 +909,10 @@ class RecognizerEngine:
                     audio_data = sr.AudioData( buf, self.sample_rate, self.sample_width)
                     actual_result = self.recognizer.recognize_google(audio_data, language='ja_JP', with_confidence=False, show_all=True )
                     if isinstance(actual_result,list) and len(actual_result)==0:
-                        print(f"[RECG] ignore {len(segment)}(blks) {partial_text}")
+                        print(f"[RECG] empty result {partial_text}")
                         self._fn_callback( { 'action':'abort','content':''} )
-                        noize_vects.put(spkvect)
+                        self._add_spkvect( SPK_NOIZE, spkvect )
+                        self._spk_update()
                         continue
                     elif isinstance(actual_result, dict) and len(actual_result.get("alternative", []))>0:
                         if "confidence" in actual_result["alternative"]:
@@ -726,37 +926,54 @@ class RecognizerEngine:
                             # "Your code should not require the confidence field as it is not guaranteed to be accurate, or even set, in any of the results."
                             confidence = best_hypothesis.get("confidence", 0.5)
                             final_text = best_hypothesis["transcript"]
-                            # ToDo AIが喋った内容と一致したらAIにしなくては
-                            if not in_speek:
-                                if len(final_text)>3:
-                                    user_vects.put(spkvect)
+                            final_len = len(final_text)
+                            if final_len<3 or confidence < 0.6:
+                                # ほぼノイズでしょう
+                                print( f"[RECOG] noize {final_text} {confidence}")
+                                self._add_spkvect( SPK_NOIZE, spkvect )
+                                self._spk_update()
+                                continue
+                            elif not in_speek:
+                                # AIは発声してない
+                                if final_len<5:
+                                    self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
+                                else:
+                                    self._add_spkvect( SPK_USER, spkvect )
+                                self._spk_update()
                             else:
-                                # AI発声中
-                                if len(final_text)<5:
+                                # AIは発声中
+                                #-------------------------------
+                                # 短かったらノイズでしょ
+                                if final_len<5:
                                     print( f"[RECOG] AI short {final_text}")
                                     self._fn_callback( { 'action':'abort','content':''} )
+                                    self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
+                                    self._spk_update()
                                     continue
                                 #------------------------------
-                                # AIの発話中でAIのベクトルが貯まるまでは識別しない
-                                if ai_vects.length()<3:
-                                    print( f"[RECOG] AI skip{ai_vects.length()} {final_text}")
-                                    self._fn_callback( { 'action':'abort','content':''} )
-                                    if len(final_text)>5:
-                                        ai_vects.put( spkvect )
-                                    continue
-                                #------------------------------
+                                # AIが発声している内容とどれくらい近いか？
                                 ai_ngram:Ngram = Ngram(in_speek)
                                 recg_ngram:Ngram = Ngram(final_text)
                                 sim: float = ai_ngram.similarity(recg_ngram)
                                 if sim>0.9:
                                     # AIと判定した
-                                    ai_vects.put(spkvect)
                                     data = { 'actin': 'partial', 'content': '' }
                                     self._fn_callback(data)
-                                    print( f"[RECOG] AI Ngram {partial_text}")
+                                    print( f"[RECOG] AI Ngram {sim} {partial_text}")
+                                    self._add_spkvect( SPK_AI, spkvect )
+                                    self._spk_update()
                                     continue
-                                # else:
-                                #     print( f"[RECG] ai??? {final_text} ? {in_speek}" )
+                                #------------------------------
+                                # AIの発話中でAIのベクトルが貯まるまでは識別しない
+                                ai_count = self._len_spkvect(SPK_AI)
+                                if ai_count<=3:
+                                    print( f"[RECOG] AI skip {ai_count}  sim:{sim} text:{final_text} in_speek:{in_speek}")
+                                    self._fn_callback( { 'action':'abort','content':''} )
+                                    self._add_spkvect( SPK_USER_OR_AI, spkvect )
+                                    self._spk_update()
+                                    continue
+                                #------------------------------
+                                # ここまできたら、AI発声中に人間がしゃべったんじゃないか？と判定
                     else:
                         print(f"[RECG] error response {actual_result}")
                         self._fn_callback( {'action':'error','error': 'invalid response'})
@@ -797,6 +1014,7 @@ class RecognizerEngine:
 
     def _fn_vosk(self):
         try:
+            noize_strs: list[str] = [ 'ん', 'えーっと', 'えっと', 'えっと ん' ]
             #------------------------------------------------------------
             # voskを初期化する
             #------------------------------------------------------------
@@ -837,54 +1055,83 @@ class RecognizerEngine:
                 before_notify=""
                 before_in_speek=None
                 in_speek:str = None
+                partial_count:int = 0
+                noize_count:int = 0
                 # 処理ループ
                 while self._running:
+                    # get from queue
                     try:
                         frame, frame_in_speek = self._wave_queue.get(timeout=1.0)
                     except:
                         continue
+                    # バッファに蓄積
                     framebuf.append(frame)
+                    # AIが発声した内容を記録
                     if frame_in_speek:
                         if in_speek is None:
                             in_speek = frame_in_speek
                             before_in_speek = frame_in_speek
-                        elif before_in_speek != frame_in_speek:
+                        elif before_in_speek != frame_in_speek and not in_speek.endswith(frame_in_speek):
                             in_speek += frame_in_speek
                     else:
                         before_in_speek = ""
+                    # 
                     send=None
                     send_text=None
+                    spkvect=None
                     if self.vosk.AcceptWaveform(frame):
-                        res = json.loads( self.vosk.Result() )
-                        txt = BotUtils.NoneToDefault(res.get('text'))
-                        if len(txt)>1:
+                        res_text:str = self.vosk.Result()
+                        res_obj = json.loads( res_text )
+                        rawtxt:str = BotUtils.NoneToDefault(res_obj.get('text'))
+                        rawlen:int = len(rawtxt)
+                        nz:bool = rawtxt in noize_strs
+                        txt:str = rawtxt
+                        tmp_spkvect = res_obj.get('spk')
+                        if rawlen <= 1 or nz:
+                            noize_count += 1
+                            if noize_count<2:
+                                print( f"[VOSK] Noize count:{noize_count} {rawtxt}")
+                            else:
+                                print( f"[VOSK] Noize count:{noize_count} {rawtxt} RESET!!")
+                                noize_count = 0
+                                self.vosk.Reset()
+                            if before_notify:
+                                self._ats_queue.put( (None,'',None,None) )
+                            txt = ''
+                            framebuf.clear()
+                        else:
                             send = framebuf
                             framebuf=[]
                             send_text = in_speek
-                        else:
-                            framebuf.clear()
+                            spkvect = tmp_spkvect
+                            if spkvect is not None:
+                                print( f"[VOSK] final   {txt} // {send_text}")
+                                npvect = np.array(spkvect)
+                                self._ats_queue.put( (send,txt,npvect, send_text) )
+                            else:
+                                print( f"[VOSK] json {res_text}")
+                                print( f"[VOSK] no spkvect {txt} // {send_text}")
+                                if before_notify:
+                                    self._ats_queue.put( (None,'',None,None) )
+                        before_notify = ""
                         in_speek = None
                         before_in_speek = None
+                        partial_count = 0
                     else:
-                        res = json.loads( self.vosk.PartialResult() )
-                        txt:str = BotUtils.NoneToDefault(res.get('partial'))
+                        partial_count += 1
+                        res_obj = json.loads( self.vosk.PartialResult() )
+                        txt:str = BotUtils.NoneToDefault(res_obj.get('partial'))
+                        if txt != before_notify:
+                            print( f"[VOSK] partial {txt} // {in_speek}")
+                            before_notify = txt
+                            self._ats_queue.put( (None,txt,None,None) )
 
-                    if send is not None:
-                        print( f"[VOSK] final   {txt}")
-                        before_notify=""
-                        spkvect = res.get('spk')
-                        self._ats_queue.put( (send,txt,spkvect, send_text) )
-                    elif txt != before_notify:
-                        print( f"[VOSK] partial {txt}")
-                        before_notify = txt
-                        self._ats_queue.put( (None,txt,None,None) )
-
-                self._ats_queue.put( (None,None,None) )
+                self._ats_queue.put( (None,None,None,None) )
 
         except Exception as e:
             traceback.print_exc()
         self._running=False
-        self._ats_queue.put( (None,None,None) )
+        self._ats_queue.put( (None,None,None,None) )
 
     @staticmethod
     def get_vosk_model( lang:str='ja' ) ->Model:

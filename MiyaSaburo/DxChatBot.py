@@ -71,6 +71,7 @@ class DxChatBot(BotCore):
         # UIへのコールバック
         self._chat_callback = None
         self._recg_callback = None
+        self._plot_callback = None
         # スレッド
         self.executor:ThreadPoolExecutor = executor if executor is not None else ThreadPoolExecutor(max_workers=4)
         self.futures:list[Future] = []
@@ -182,7 +183,8 @@ class DxChatBot(BotCore):
             self.tts = TtsEngine( submit_task = self.submit_task, talk_callback=self._fn_tts_callback )
         else:
             self.tts = None
-    
+
+    # TTSからコールされる
     def _fn_tts_callback(self, text:str, emotion:int, tts_model:str ):
         self.att_set_speek( text )
         if text is not None:
@@ -193,18 +195,25 @@ class DxChatBot(BotCore):
         if self.tts is not None:
             self.tts.cancel()
 
+    # RecognizerEngineからコールされる
     def _fn_recg_callback(self, data:dict ):
         if self._recg_callback is not None:
             content:str = data.get('content')
             self._recg_callback(content)
             if data.get('action') == 'final' and self._recg_autosend:
                 self.send_message(content)
+        if self._plot_callback is not None:
+            spk2d = data.get('spk2d')
+            colors = data.get('colors')
+            if spk2d is not None:
+                self._plot_callback(spk2d,colors)
         else:
             print(f"[BOT] recg {data}")
 
-    def set_recg_callback(self, callback=None ):
-        if callback is not None:
-            self._recg_callback = callback
+    def set_recg_callback(self, recg_callback=None, plot_callback=None ):
+        if recg_callback is not None:
+            self._recg_callback = recg_callback
+            self._plot_callback = plot_callback
             if self.att is None:
                 self.att = RecognizerEngine()
                 self.att.start()
@@ -215,6 +224,7 @@ class DxChatBot(BotCore):
                 self.att._callback=None
             self.att = None
             self._recg_callback = None
+            self._plot_callback = None
 
     def set_recg_autosend( self, sw=False ) ->None:
         self._recg_autosend = sw
