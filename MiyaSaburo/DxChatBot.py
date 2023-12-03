@@ -97,6 +97,8 @@ class DxChatBot(BotCore):
 
     def stop(self) ->None:
         self.tts_cancel()
+        self.set_recg_callback(None,None)
+        self.setTTS(False)
         with self.lock:
             try:
                 if self._tm_timer is not None:

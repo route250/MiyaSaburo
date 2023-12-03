@@ -229,13 +229,13 @@ def chat_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
         message:str = json.dumps( data, indent=4, ensure_ascii=False, sort_keys=True )
         info_textarea.delete('1.0',tk.END)
         info_textarea.insert('1.0',message)
-    bot.info_callback = lambda data: update_info(data)
+    bot.info_callback = lambda data: update_queue.put( (update_info,{"data": data}) )
 
     def update_log( message ):
         text:str = BotUtils.to_str(message)
         log_textarea.insert(tk.END, "\n"+text)
 
-    bot.log_callback = lambda message: update_log(message)
+    bot.log_callback = lambda message: update_queue.put( (update_log,{'message':message}) )
 
 def debug_ui( bot: BotCore ):
     # キューの作成

@@ -1044,7 +1044,7 @@ class RecognizerEngine:
             else:
                 self.model = Model(lang=self.model)
             self.vosk: KaldiRecognizer = KaldiRecognizer(self.model, self.sample_rate)
-            spkmodel_path = RecognizerEngine.get_vosk_spk_model()
+            spkmodel_path = RecognizerEngine.get_vosk_spk_model(self.model)
             if spkmodel_path is not None:
                 self.vosk.SetSpkModel( spkmodel_path )
             #------------------------------------------------------------
@@ -1149,10 +1149,11 @@ class RecognizerEngine:
             model_file = [model for model in model_file_list if re.match(rf"vosk-model-small-{lang}", model)]
             if model_file != []:
                 return Model(str(Path(directory, model_file[0])))
-        return None
+        m:Model = Model(lang=lang)
+        return m
 
     @staticmethod
-    def get_vosk_spk_model():
+    def get_vosk_spk_model(m:Model=None):
         for directory in vosk.MODEL_DIRS:
             if directory is None or not Path(directory).exists():
                 continue
@@ -1160,6 +1161,10 @@ class RecognizerEngine:
             model_file = [model for model in model_file_list if re.match(r"vosk-model-spk-", model)]
             if model_file != []:
                 return SpkModel(str(Path(directory, model_file[0])))
+            
+        p:str = m.get_model_path('vosk-model-spk-0.4',None) if m is not None else None
+        if p is not None:
+            return SpkModel( p )
         return None
 
 class BotUtils:
