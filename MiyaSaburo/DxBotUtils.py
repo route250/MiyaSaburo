@@ -39,7 +39,7 @@ from vosk import Model, KaldiRecognizer, SpkModel
 import sounddevice as sd
 
 from sklearn.decomposition import PCA
-
+vosk.SetLogLevel(-1)
 Price = {
     "gpt3.5"
 }
@@ -712,6 +712,7 @@ class RecognizerEngine:
 
     def start(self):
         try:
+            vosk.SetLogLevel(-1)
             self._running = True
             self._pca_thread = Thread( target=self._fn_pca, daemon=True )
             self.att_thread = Thread( target=self._fn_recognize, daemon=True )
@@ -906,13 +907,14 @@ class RecognizerEngine:
                         buf += bytearray(s)
                     # rate 44100 width 2 ja_JP
                     # buffer <bytearray, len() = 882000> type(buffer) <class 'bytearray'> WIDTH 2 RATE 44100
-                    audio_data = sr.AudioData( buf, self.sample_rate, self.sample_width)
+                    audio_data = sr.AudioData( buf, int(self.sample_rate*0.8), self.sample_width)
                     actual_result = self.recognizer.recognize_google(audio_data, language='ja_JP', with_confidence=False, show_all=True )
                     if isinstance(actual_result,list) and len(actual_result)==0:
                         print(f"[RECG] empty result {partial_text}")
                         self._fn_callback( { 'action':'abort','content':''} )
-                        self._add_spkvect( SPK_NOIZE, spkvect )
-                        self._spk_update()
+                        if len(partial_text)<5:
+                            self._add_spkvect( SPK_NOIZE, spkvect )
+                            self._spk_update()
                         continue
                     elif isinstance(actual_result, dict) and len(actual_result.get("alternative", []))>0:
                         if "confidence" in actual_result["alternative"]:
@@ -936,8 +938,10 @@ class RecognizerEngine:
                             elif not in_speek:
                                 # AIは発声してない
                                 if final_len<5:
+                                    print( f"[RECOG] USER/NOIZE {final_text} {confidence}")
                                     self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
                                 else:
+                                    print( f"[RECOG] USER {final_text} {confidence}")
                                     self._add_spkvect( SPK_USER, spkvect )
                                 self._spk_update()
                             else:
@@ -974,6 +978,7 @@ class RecognizerEngine:
                                     continue
                                 #------------------------------
                                 # ここまできたら、AI発声中に人間がしゃべったんじゃないか？と判定
+                                print( f"[RECOG] AI/USER {final_text} {confidence}")
                     else:
                         print(f"[RECG] error response {actual_result}")
                         self._fn_callback( {'action':'error','error': 'invalid response'})
@@ -1039,6 +1044,7 @@ class RecognizerEngine:
             self._q_full = False
 
             # voskの設定
+            vosk.SetLogLevel(-1)
             if self.model is None:
                 self.model = RecognizerEngine.get_vosk_model(lang="ja")
             else:
