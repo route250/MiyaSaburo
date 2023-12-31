@@ -1322,6 +1322,7 @@ class RecognizerEngine:
                                     self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
                                 else:
                                     print( f"[RECG] USER {final_text} {confidence}")
+                                    print( f"[RECOG] USER {final_text} {confidence}")
                                     self._add_spkvect( SPK_USER, spkvect )
                                 self._spk_update()
                             else:
