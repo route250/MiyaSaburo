@@ -22,12 +22,15 @@ from openai import OpenAI
 from openai.types import Completion, CompletionChoice, CompletionUsage
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.chat import ChatCompletion, ChatCompletionToolParam, ChatCompletionMessage
-from openai.types.chat.chat_completion_message_tool_call import Function
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
 from openai.types.chat.completion_create_params import ResponseFormat
 from openai._types import Timeout
 import tiktoken
 from tiktoken.core import Encoding
-from libs.utils import Utils
+try:
+    from libs.utils import Utils
+except ImportError:
+    from MiyaSaburo.libs.utils import Utils
 
 from gtts import gTTS
 from io import BytesIO
@@ -37,9 +40,11 @@ import speech_recognition as sr
 import vosk
 from vosk import Model, KaldiRecognizer, SpkModel
 import sounddevice as sd
+import librosa
+import pyworld as pw
 
 from sklearn.decomposition import PCA
-
+vosk.SetLogLevel(-1)
 Price = {
     "gpt3.5"
 }
@@ -122,6 +127,24 @@ class ToolBuilder:
             }
         })
 
+    @staticmethod
+    def decode( f:ChatCompletionMessageToolCall ) ->ChatCompletionMessageToolCall:
+        f.function.arguments = BotUtils.decode_utf8( f.function.arguments )
+        f.function.name = BotUtils.decode_utf8(f.function.name)
+        return f
+
+    @staticmethod
+    def decode_tool_calls( orig_message ):
+        message = json.loads(orig_message.json())
+        print( f"[JSON]{message}")
+        tool_calls = message.get("tool_calls",[])
+        for call in tool_calls:
+            funcs = call.get("function",{})
+            args = funcs.get("arguments")
+            if args:
+                funcs["arguments"]=json.dumps(json.loads(args),ensure_ascii=False)
+        return message
+
 class BotCore:
 
     def __init__(self):
@@ -158,7 +181,7 @@ class BotCore:
             if self.info_callback is not None:
                 self.info_callback( self.info_data )
     
-    def setTTS(self, sw:bool = False ):
+    def setTTS(self, speaker_id=None ):
         pass
 
     def set_recg_callback( self, recg_callback=None, plot_callback=None ) ->None:
@@ -249,8 +272,49 @@ class BotCore:
         finally:
             self.notify_log(content)
 
-    def ChatCompletion( self, mesg_list:list[dict], temperature:float=0, stop=None, tools=None, tool_choice=None, *, max_retries=2, read_timeout=60, json_fmt:dict=None ):
+    def ChatCompletion( self, mesg_list:list[dict], temperature:float=0, stop=None, *, max_retries=2, read_timeout=60, json_fmt:dict=None ):
+        """ChatCompletionを実行する
+
+        Args:
+            mesg_list (list[dict]): 会話履歴
+            temperature (float, optional): 生成精度. Defaults to 0.
+            stop (_type_, optional): 停止文字. Defaults to None.
+            max_retries (int, optional): リトライ回数. Defaults to 2.
+            read_timeout (int, optional): 通信タイムアウト. Defaults to 60.
+            json_fmt (dict, optional): 返信フォーマット指定. Defaults to None.
+
+        Returns:
+            str: 生成された文章
+        """
+        ret,tool_calls = self.ChatCompletion3(mesg_list,temperature,stop,max_retries=max_retries, read_timeout=read_timeout, json_fmt=json_fmt )
+        return ret
+
+    def ChatCompletion2( self, mesg_list:list[dict], temperature:float=0, stop=None, *, tools=None, tool_choice=None, max_retries=2, read_timeout=60, json_fmt:dict=None ):
+        # toolが無い場合
+        if tools is None:
+            return self.ChatCompletion3(mesg_list,temperature,stop,max_retries=max_retries, read_timeout=read_timeout, json_fmt=json_fmt )
+
+        # toolがある場合、無いツールを指定してきたりするのでチェックしてリトライする
+        try_count = 0
+        while True:
+            res,tool_calls = self.ChatCompletion3(mesg_list,temperature,stop,tools=tools,tool_choice=tool_choice, max_retries=max_retries, read_timeout=read_timeout, json_fmt=json_fmt )
+            # toolが無い場合
+            if try_count>=2 or not isinstance(tool_calls,list):
+                return res,tool_calls
+            # toolがある場合
+            # 呼び出したfunction名のリスト
+            func_names = [ t.get('function',{}).get('name',None) for t in tools]
+            # 戻り値のfunctionから、func_namesに含まれるものだけ
+            new_calls = [ call for call in tool_calls if call.get("function",{}).get('name','xxxxxxxx') in func_names]
+            if len(new_calls)>0:
+                return res,new_calls[:1]
+            invalid_names = [ call.get("function",{}).get('name',None) for call in tool_calls if call.get("function",{}).get('name','xxxxxxxx') not in func_names]
+            print( f"[ERROR] tool_calls invalid func name {invalid_names} ")
+            try_count += 1
+
+    def ChatCompletion3( self, mesg_list:list[dict], temperature:float=0, stop=None, *, tools=None, tool_choice=None, max_retries=2, read_timeout=60, json_fmt:dict=None ):
         content = None
+        tool_calls = None
         try:
             mesg_list2:list[dict] = mesg_list
             kwargs = {}
@@ -303,13 +367,24 @@ class BotCore:
             if response is None or response.choices is None or len(response.choices)==0:
                 logger.error( f"invalid response from openai\n{response}")
             else:
-                m = response.choices[0].message
-                if m.tool_calls is not None:
-                    funcs: list[Function] = [ x.function for x in m.tool_calls ]
-                    #response.choices[0].message.tool_calls[0].function
-                    content = funcs
+                msg = response.choices[0].message
+                if msg.tool_calls is not None:
+                    content = msg.content
+                    decorded = json.loads(msg.json())
+                    print( f"[JSON]{decorded}")
+                    tool_calls = decorded.get("tool_calls")
                 else:
-                    content = m.content.strip() if m.content is not None else ""
+                    content = msg.content.strip() if msg.content is not None else ""
+
+        except openai.BadRequestError as ex:
+            try:
+                data = json.loads(ex.response.text)
+                mesg = data['error']['message']
+                api_logger.error( f"BadRequestError {mesg}" )
+                logger.error( f"ChatCompletion BadRequestError {mesg}" )
+            except:
+                api_logger.error( f"{ex}" )
+                logger.error( f"ChatCompletion {ex}" )
 
         except openai.AuthenticationError as ex:
             api_logger.error( f"{ex}" )
@@ -322,7 +397,7 @@ class BotCore:
             logger.exception( f"%s", ex )
 
         self.notify_log(content)
-        return content
+        return (content, tool_calls)
 
     def timer_task(self) -> None:
         pass
@@ -342,10 +417,6 @@ class BotCore:
 
 class TtsEngine:
     VoiceList = [
-        ( "gTTS[ja_JP]", -1, 'ja_JP' ),
-        ( "gTTS[en_US]", -1, 'en_US' ),
-        ( "gTTS[en_GB]", -1, 'en_GB' ),
-        ( "gTTS[fr_FR]", -1, 'fr_FR' ),
         ( "VOICEVOX:四国めたん [あまあま]", 0, 'ja_JP' ),
         ( "VOICEVOX:四国めたん [ノーマル]", 2, 'ja_JP' ),
         ( "VOICEVOX:四国めたん [セクシー]", 4, 'ja_JP' ),
@@ -364,44 +435,114 @@ class TtsEngine:
         ( "VOICEVOX:白上虎太郎 [おこ]", 34, 'ja_JP' ),
         ( "VOICEVOX:白上虎太郎 [びえーん]", 36, 'ja_JP' ),
         ( "VOICEVOX:もち子(cv 明日葉よもぎ)[ノーマル]", 20, 'ja_JP' ),
-        ( "OpenAI:alloy[ja_JP]", 1001, 'ja_JP' ),
-        ( "OpenAI:echo[ja_JP]", 1002, 'ja_JP' ),
-        ( "OpenAI:fable[ja_JP]", 1003, 'ja_JP' ),
-        ( "OpenAI:onyx[ja_JP]", 1004, 'ja_JP' ), # 男性っぽい
-        ( "OpenAI:nova[ja_JP]", 1005, 'ja_JP' ), # 女性っぽい
-        ( "OpenAI:shimmer[ja_JP]", 1006, 'ja_JP' ), # 女性ぽい
+        ( "OpenAI:alloy", 1001, 'ja_JP' ),
+        ( "OpenAI:echo", 1002, 'ja_JP' ),
+        ( "OpenAI:fable", 1003, 'ja_JP' ),
+        ( "OpenAI:onyx", 1004, 'ja_JP' ), # 男性っぽい
+        ( "OpenAI:nova", 1005, 'ja_JP' ), # 女性っぽい
+        ( "OpenAI:shimmer", 1006, 'ja_JP' ), # 女性ぽい
+        ( "gTTS:[ja_JP]", 2000, 'ja_JP' ),
+        ( "gTTS:[en_US]", 2001, 'en_US' ),
+        ( "gTTS:[en_GB]", 2002, 'en_GB' ),
+        ( "gTTS:[fr_FR]", 2003, 'fr_FR' ),
     ]
 
     @staticmethod
-    def id_to_name( idx:int ) -> str:
-        return next((voice for voice in TtsEngine.VoiceList if voice[1] == idx), "???")
+    def id_to_model( idx:int ) -> str:
+        return next((voice for voice in TtsEngine.VoiceList if voice[1] == idx), None )
 
-    def __init__(self, *, submit_task = None, talk_callback = None ):
+    @staticmethod
+    def id_to_name( idx:int ) -> str:
+        voice = TtsEngine.id_to_model( idx )
+        name = voice[0]
+        return name if name else '???'
+
+    @staticmethod
+    def id_to_lang( idx:int ) -> str:
+        voice = TtsEngine.id_to_model( idx )
+        lang = voice[2]
+        return lang if lang else 'ja_JP'
+
+    def __init__(self, *, speaker=-1, submit_task = None, talk_callback = None ):
+        # 並列処理用
         self.lock: threading.Lock = threading.Lock()
         self._running_future:Future = None
         self._running_future2:Future = None
-        self._talk_id: int = 0
         self.wave_queue:queue.Queue = queue.Queue()
         self.play_queue:queue.Queue = queue.Queue()
-        self.speaker = 3
-        self.submit_call = submit_task
-        self.start_call = talk_callback
+        # 発声中のセリフのID
+        self._talk_id: int = 0
+        # 音声エンジン選択
+        self.speaker = speaker
+        # コールバック
+        self.submit_call = submit_task # スレッドプールへの投入
+        self.start_call = talk_callback # 発声開始と完了を通知する
+        # pygame初期化済みフラグ
         self.pygame_init:bool = False
-        self._disable_voicevox: float = 0.0
+        # 音声エンジン無効時間
         self._disable_gtts: float = 0.0
+        self._disable_openai: float = 0.0
+        self._disable_voicevox: float = 0.0
+        # VOICEVOXサーバURL
+        self._voicevox_url = None
+        self._voicevox_port = os.getenv('VOICEVOX_PORT','50021')
+        self._voicevox_list = list(set([os.getenv('VOICEVOX_HOST','127.0.0.1'),'127.0.0.1','192.168.0.104','chickennanban.ddns.net']))
 
     def cancel(self):
         self._talk_id += 1
 
+    def _get_voicevox_url( self ) ->str:
+        if self._voicevox_url is None:
+            self._voicevox_url = BotUtils.find_first_responsive_host(self._voicevox_list,self._voicevox_port)
+        return self._voicevox_url
+
+    @staticmethod
+    def remove_code_blocksRE(markdown_text):
+        # 正規表現を使用してコードブロックを検出し、それらを改行に置き換えます
+        # ```（コードブロックの開始と終了）に囲まれた部分を検出します
+        # 正規表現のパターンは、```で始まり、任意の文字（改行を含む）にマッチし、最後に```で終わるものです
+        # re.DOTALLは、`.`が改行にもマッチするようにするフラグです
+        pattern = r'```.*?```'
+        return re.sub(pattern, '\n', markdown_text, flags=re.DOTALL)
+
+    @staticmethod
+    def split_talk_text( text):
+        sz = len(text)
+        st = 0
+        lines = []
+        while st<sz:
+            block_start = text.find("```",st)
+            newline_pos = text.find('\n',st)
+            if block_start>=0 and ( newline_pos<0 or block_start<newline_pos ):
+                if st<block_start:
+                    lines.append( text[st:block_start] )
+                block_end = text.find( "```", block_start+3)
+                if (block_start+3)<block_end:
+                    block_end += 3
+                else:
+                    block_end = sz
+                lines.append( text[block_start:block_end])
+                st = block_end
+            else:
+                if newline_pos<0:
+                    newline_pos = sz
+                if st<newline_pos:
+                    lines.append( text[st:newline_pos] )
+                st = newline_pos+1
+        return lines
+
     def add_talk(self, full_text:str, emotion:int = 0 ) -> None:
         talk_id:int = self._talk_id
-        for text in BotUtils.split_string(full_text):
+        for text in TtsEngine.split_talk_text(full_text):
             self.wave_queue.put( (talk_id, text, emotion ) )
         with self.lock:
             if self._running_future is None:
                 self._running_future = self.submit_call(self.run_text_to_audio)
     
     def run_text_to_audio(self)->None:
+        """ボイススレッド
+        テキストキューからテキストを取得して音声に変換して発声キューへ送る
+        """
         while True:
             talk_id:int = -1
             text:str = None
@@ -420,8 +561,8 @@ class TtsEngine:
             try:
                 if talk_id == self._talk_id:
                     # textから音声へ
-                    audio_bytes, model = self._text_to_audio( text, emotion )
-                    self._add_audio( talk_id,text,emotion,audio_bytes,model )
+                    audio_bytes, tts_model = self._text_to_audio( text, emotion )
+                    self._add_audio( talk_id,text,emotion,audio_bytes,tts_model )
             except Exception as ex:
                 traceback.print_exc()
 
@@ -431,23 +572,32 @@ class TtsEngine:
             if self._running_future2 is None:
                 self._running_future2 = self.submit_call(self.run_talk)
 
+    @staticmethod
+    def __penpenpen( text, default=" " ) ->str:
+        if text is None or text.startswith("```"):
+            return default # VOICEVOX,OpenAI,gTTSで、エラーにならない無音文字列
+        else:
+            return text
+        
     def _text_to_audio_by_voicevox(self, text: str, emotion:int = 0, lang='ja') -> bytes:
         if self._disable_voicevox>0 and (time.time()-self._disable_voicevox)<180.0:
             return None,None
+        sv_url: str = self._get_voicevox_url()
+        if sv_url is None:
+            self._disable_voicevox = time.time()
+            return None,None
         try:
             self._disable_voicevox = 0
-            sv_host: str = os.getenv('VOICEVOX_HOST','127.0.0.1')
-            sv_port: str = os.getenv('VOICEVOX_PORT','50021')
             timeout = (5.0,180.0)
-            params = {'text': text, 'speaker': self.speaker, 'timeout': timeout }
-            s = requests.Session()
-            s.mount(f'http://{sv_host}:{sv_port}/audio_query', HTTPAdapter(max_retries=1))
-            res1 : requests.Response = requests.post( f'http://{sv_host}:{sv_port}/audio_query', params=params)
+            params = {'text': TtsEngine.__penpenpen(text, ' '), 'speaker': self.speaker, 'timeout': timeout }
+            s:requests.Session = requests.Session()
+            s.mount(f'{sv_url}/audio_query', HTTPAdapter(max_retries=1))
+            res1 : requests.Response = requests.post( f'{sv_url}/audio_query', params=params)
 
             params = {'speaker': self.speaker, 'timeout': timeout }
             headers = {'content-type': 'application/json'}
             res = requests.post(
-                f'http://{sv_host}:{sv_port}/synthesis',
+                f'{sv_url}/synthesis',
                 data=res1.content,
                 params=params,
                 headers=headers
@@ -465,18 +615,26 @@ class TtsEngine:
         self._disable_voicevox = time.time()
         return None,None
 
-    def _text_to_audio_by_gtts(self, text: str, emotion:int = 0, lang='ja') -> bytes:
+    def _text_to_audio_by_gtts(self, text: str, emotion:int = 0) -> bytes:
         if self._disable_gtts>0 and (time.time()-self._disable_gtts)<180.0:
             return None,None
+        voice = TtsEngine.id_to_model( self.speaker )
+        lang = voice[2] if voice else 'ja_JP'
+        lang = lang[:2]
         try:
             self._disable_gtts = 0
-            tts = gTTS(text=text, lang=lang,lang_check=False )
+            tts = gTTS(text=TtsEngine.__penpenpen(text,'!!'), lang=lang,lang_check=False )
             # gTTSはmp3で返ってくる
             with BytesIO() as buffer:
                 tts.write_to_fp(buffer)
                 wave:bytes = buffer.getvalue()
                 del tts
                 return wave,f"gTTS[{lang}]"
+        except AssertionError as ex:
+            if "No text to send" in str(ex):
+                return None,f"gTTS[{lang}]"
+            print( f"[gTTS] {ex}")
+            traceback.print_exc()
         except requests.exceptions.ConnectTimeout as ex:
             print( f"[gTTS] timeout")
         except Exception as ex:
@@ -485,8 +643,8 @@ class TtsEngine:
         self._disable_gtts = time.time()
         return None,None
 
-    def _text_to_audio_by_openai(self, text: str, emotion:int = 0, lang='ja') -> bytes:
-        if self._disable_gtts>0 and (time.time()-self._disable_gtts)<180.0:
+    def _text_to_audio_by_openai(self, text: str, emotion:int = 0) -> bytes:
+        if self._disable_openai>0 and (time.time()-self._disable_openai)<180.0:
             return None,None
         try:
             vc:str = "alloy"
@@ -502,33 +660,33 @@ class TtsEngine:
                 vc = "nova"
             elif self.speaker==1006:
                 vc = "shimmer"
-            self._disable_gtts = 0
+            self._disable_openai = 0
             client:OpenAI = get_client()
             response:openai._base_client.HttpxBinaryResponseContent = client.audio.speech.create(
                 model="tts-1",
                 voice=vc,
                 response_format="mp3",
-                input=text
+                input=TtsEngine.__penpenpen(text,' ')
             )
             # openaiはmp3で返ってくる
-            return response.content,"OpenAI"
+            return response.content,f"OpenAI:{vc}"
         except requests.exceptions.ConnectTimeout as ex:
             print( f"[gTTS] timeout")
         except Exception as ex:
             print( f"[gTTS] {ex}")
             traceback.print_exc()
-        self._disable_gtts = time.time()
+        self._disable_openai = time.time()
         return None,None
 
-    def _text_to_audio( self, text: str, emotion:int = 0, lang='ja' ) -> bytes:
+    def _text_to_audio( self, text: str, emotion:int = 0 ) -> bytes:
         wave: bytes = None
         model:str = None
-        if self.speaker>=1000:
-            wave, model = self._text_to_audio_by_openai( text, emotion, lang=lang )
-        elif self.speaker>=0 and lang=='ja':
-            wave, model = self._text_to_audio_by_voicevox( text, emotion, lang=lang )
+        if 0<=self.speaker and self.speaker<1000:
+            wave, model = self._text_to_audio_by_voicevox( text, emotion )
+        if 1000<=self.speaker and self.speaker<2000:
+            wave, model = self._text_to_audio_by_openai( text, emotion )
         if wave is None:
-            wave, model = self._text_to_audio_by_gtts( text, emotion, lang=lang )
+            wave, model = self._text_to_audio_by_gtts( text, emotion )
         return wave,model
         
     def run_talk(self)->None:
@@ -561,7 +719,7 @@ class TtsEngine:
                             self.pygame_init = True
                         mp3_buffer = BytesIO(audio)
                         pygame.mixer.music.load(mp3_buffer)
-                        pygame.mixer.music.play(1)
+                        pygame.mixer.music.play(1,0.0) # 再生回数１回、フェードイン時間ゼロ
                     if self.start_call is not None:
                         self.start_call( text, emotion, tts_model )
                     if audio is not None:
@@ -576,6 +734,213 @@ class TtsEngine:
                     
             except Exception as ex:
                 traceback.print_exc()
+
+
+
+class VoiceSeg:
+
+    def __init__(self):
+        self.f0_cut =0.3
+        self.f0_mid = 0.8
+        self._buf_sz = 100
+        self._buf_count=0
+        self._buf_list = [None] * (self._buf_sz+1)
+        self._before_level = 0
+        self._before_rec:bool = False
+        self._pre_length=2
+        self._post_length = 3
+        self._post_count = 0
+        self._buf_count_low = 3
+    
+    def reset(self):
+        self._buf_count = 0
+
+    # F0をカウントして有声無声判定
+    # https://blog.shinonome.io/voice-recog-random/
+    # https://qiita.com/zukky_rikugame/items/dea51c60bfb984d39029
+    def _f0_ratio( self, wave_float64, sr ) ->float:
+        _f0, t = pw.dio(wave_float64, sr, frame_period=1) 
+        f0 = pw.stonemask(wave_float64, _f0, t, sr)
+        f0_vuv = f0[f0 > 0] # 有声・無声フラグ
+        vuv_ratio = len(f0_vuv)/len(f0) # 有声部分の割合
+        return vuv_ratio
+
+    def _calc_mfcc(self, wave_float2, frame_rate ):
+        mfcc_list = librosa.feature.mfcc(  y=wave_float2, sr=frame_rate, n_mfcc=20, n_fft=512 )
+        mfcc_13 = mfcc_list[ 1:14, : ]
+        # mfcc = np.average(mfcc_13,axis=1)
+        # mfcc = np.mean(mfcc_13,axis=1)
+        mfcc = np.max(mfcc_13,axis=1)
+        return mfcc
+
+    def _trim(self):
+        if self._buf_count > self._pre_length:
+            diff = self._buf_count - self._pre_length
+            for idx in range(0,self._pre_length):
+                self._buf_list[idx] = self._buf_list[idx+diff]
+            self._buf_count = self._pre_length
+
+
+    def put(self, wave:np.ndarray, frame_rate:int, xflg:bool = False ):
+        sec:float = (float(len(wave))/float(frame_rate))
+        wave_int16:np.ndarray = wave.astype(np.int16)
+        wave_float64:np.ndarray = wave.astype(np.float64)
+        wave_float64 = wave_float64 / 32767.0
+        f0_ratio = self._f0_ratio( wave_float64, frame_rate )
+        f0_level = 2 if f0_ratio>self.f0_mid else 1 if f0_ratio>self.f0_cut else 0
+        flush:bool = False
+        rec:bool = self._before_rec
+
+        empty=False
+        if rec:
+            if f0_level == 0:
+                self._post_count += 1
+                if self._post_count >= self._post_length:
+                    if self._buf_count > ( self._pre_length + self._buf_count_low + self._post_length ):
+                        flush = True
+                    else:
+                        self._trim()
+                    rec = False
+            else:
+                self._post_count = 0
+        else:
+            if f0_level>=2:
+                rec = True
+                self._post_count = 0
+            else:
+                if self._buf_count>=self._pre_length:
+                    if xflg:
+                        f0_level = -1
+                        flush = True
+                        empty = True
+                    else:
+                        self._trim()
+
+        if flush or self._buf_count>=self._buf_sz:
+            if empty:
+                print(f"[frame] F0 ratio:{f0_ratio:6.3f} {self._before_level} to {f0_level} rec:{rec} EMPTY!")
+            elif self._before_level != f0_level or self._before_rec != rec:
+                print(f"[frame] F0 ratio:{f0_ratio:6.3f} {self._before_level} to {f0_level} rec:{rec} FLUSH!")
+        # else:
+        #     if self._before_level != f0_level or self._before_rec != rec:
+        #         print(f"[frame] F0 ratio:{f0_ratio:6.3f} {self._before_level} to {f0_level} rec:{rec}")
+
+        self._buf_list[self._buf_count] = wave_int16
+        self._buf_count += 1
+        self._before_level = f0_level
+        self._before_rec = rec
+
+        if flush or self._buf_count>=self._buf_sz:
+            # 有声から無声に変化した、もしくは、バッファがいっぱいなら
+            concat_int16 = np.concatenate(self._buf_list[:self._buf_count])
+            self._buf_count = 0
+            self._post_count = 0
+            # mfcc計算
+            wave_float = concat_int16.astype(np.float64)
+            wave_float2 = wave_float / 32767.0
+            mfcc = self._calc_mfcc( wave_float2, frame_rate )
+            # byteデータへ変換
+            #byte_data = concat_int16.astype(np.int16).tobytes()
+            # 次のキューへ
+            return f0_level, concat_int16, mfcc
+        else:
+            return f0_level, None, None
+        
+    def put2(self, wave:np.ndarray, frame_rate:int, xflg:bool = False ):
+        sec:float = (float(len(wave))/float(frame_rate))
+        wave_int16:np.ndarray = wave.astype(np.int16)
+        wave_float64:np.ndarray = wave.astype(np.float64)
+        wave_float64 = wave_float64 / 32767.0
+        f0_ratio = self._f0_ratio( wave_float64, frame_rate )
+        f0_level = 2 if f0_ratio>self.f0_mid else 1 if f0_ratio>self.f0_cut else 0
+        flush:bool = False
+        rec:bool = self._before_rec
+        if xflg:
+            rec = True
+        if rec:
+            if self._before_level==0 and f0_level==0:
+                flush = True
+                rec = False
+        else:
+            if f0_level>=2:
+                rec = True
+            else:
+                if self._buf_count>1:
+                    for idx in range(1,self._buf_count):
+                        self._buf_list[idx-1] = self._buf_list[idx]
+                    self._buf_count -= 1
+
+        if self._before_level != f0_level or self._before_rec != rec:
+            print(f"[frame] F0 ratio:{f0_ratio:6.3f} {self._before_level} to {f0_level} rec:{rec}")
+
+        self._buf_list[self._buf_count] = wave_int16
+        self._buf_count += 1
+        self._before_level = f0_level
+        self._before_rec = rec
+
+        if flush or self._buf_count>=self._buf_sz:
+            # 有声から無声に変化した、もしくは、バッファがいっぱいなら
+            concat_int16 = np.concatenate(self._buf_list[:self._buf_count])
+            self._buf_count = 0
+            # mfcc計算
+            wave_float = concat_int16.astype(np.float64)
+            wave_float2 = wave_float / 32767.0
+            mfcc = self._calc_mfcc( wave_float2, frame_rate )
+            # byteデータへ変換
+            #byte_data = concat_int16.astype(np.int16).tobytes()
+            # 次のキューへ
+            return f0_level, concat_int16, mfcc
+        else:
+            return f0_level, None, None
+        
+    def put1(self, wave:np.ndarray, frame_rate:int, xflg:bool = False ):
+        wave_int16:np.ndarray = wave.astype(np.int16)
+        wave_float64:np.ndarray = wave.astype(np.float64)
+        wave_float64 = wave_float64 / 32767.0
+        f0_ratio = self._f0_ratio( wave_float64, frame_rate )
+        f0_level = 2 if f0_ratio>self.f0_mid else 1 if f0_ratio>self.f0_cut else 0
+        if self._before_level != f0_level:
+            print(f"[frame] F0 ratio:{f0_ratio:6.3f} {self._before_level} to {f0_level}")
+        
+        self._buf_list[self._buf_count] = wave_int16
+        self._buf_count += 1
+        flush:bool = self._buf_count >= self._buf_sz
+        if self._before_level >= 2:
+            if f0_level >= 2:
+                pass
+            elif f0_level == 1:
+                flush = True
+            else:
+                flush = True
+        elif self._before_level == 1:
+            if f0_level >= 2:
+                pass
+            elif f0_level == 1:
+                pass
+            else:
+                flush = True
+        else:
+            if f0_level >= 2:
+                pass
+            else:
+                self._buf_list[0] = wave_int16
+                self._buf_count = 1
+        self._before_level = f0_level
+        if flush:
+            # 有声から無声に変化した、もしくは、バッファがいっぱいなら
+            concat_int16 = np.concatenate(self._buf_list[:self._buf_count])
+            self._buf_count = 0
+            # mfcc計算
+            wave_float = concat_int16.astype(np.float64)
+            wave_float2 = wave_float / 32767.0
+            mfcc = self._calc_mfcc( wave_float2, frame_rate )
+            # byteデータへ変換
+            #byte_data = concat_int16.astype(np.int16).tobytes()
+            # 次のキューへ
+            return f0_level, concat_int16, mfcc
+        else:
+            return f0_level, None, None
+
 class VectList:
     def __init__(self,num=10):
         self._list:np.ndarray = np.empty((0,0))
@@ -680,6 +1045,7 @@ COLORMAP1=[ '#888888', '#008888', '#ff8888', '#ff88ff', '#8888ff']
 COLORMAP2=[ '#000000', '#00ffff', '#ff0000', '#ff00ff', '#0000ff']
 class RecognizerEngine:
     def __init__(self):
+        self.lang='ja_JP'
         self._callback = None
         self._running=False
         self.device=None
@@ -697,6 +1063,13 @@ class RecognizerEngine:
         self._spk_veclist = [ VectList(SPK_NN) for _ in range(SPK_LEN)]
         self._spklen = [ 0 for _ in range(5)]
         self._pca = PCA(n_components=2)
+        # mfcc用
+        self._mfcc_sz = 100
+        self._mfcc_list = [None]*self._mfcc_sz
+        self._mfcc_count = 0
+
+    def set_lang(self, lang:str='ja_JP' ):
+        self.lang=lang
 
     def set_mic_device(self,device):
         self.device = device
@@ -712,6 +1085,7 @@ class RecognizerEngine:
 
     def start(self):
         try:
+            vosk.SetLogLevel(-1)
             self._running = True
             self._pca_thread = Thread( target=self._fn_pca, daemon=True )
             self.att_thread = Thread( target=self._fn_recognize, daemon=True )
@@ -841,20 +1215,20 @@ class RecognizerEngine:
                             if self._spk_veclen( SPK_AI )<10:
                                 data = { 'actin': 'partial', 'content': '' }
                                 self._fn_callback(data)
-                                print( f"[RECOG] PreCancel AI<10 in speek {partial_text}")
+                                print( f"[RECG] PreCancel AI<10 in speek {partial_text}")
                                 continue
                             if self._spk_ismatch( SPK_AI, False ):
                                 data = { 'actin': 'partial', 'content': '' }
                                 self._fn_callback(data)
-                                print( f"[RECOG] PreCancel AI in speek {partial_text}")
+                                print( f"[RECG] PreCancel AI in speek {partial_text}")
                                 continue
-                        print( f"[RECOG] PreCancel Interrupt in speek {partial_text}")
+                        print( f"[RECG] PreCancel Interrupt in speek {partial_text}")
                     else:
                         if self._spk_ismatch( SPK_NOIZE, spkvect ):
                             if not self._spk_ismatch( SPK_USER, spkvect ):
                                 data = { 'actin': 'partial', 'content': '' }
                                 self._fn_callback(data)
-                                print( f"[RECOG] PreCandel Noize {partial_text}")
+                                print( f"[RECG] PreCandel Noize {partial_text}")
                                 continue
 
                     # xgrp = self._spk_prediction( spkvect )
@@ -875,7 +1249,7 @@ class RecognizerEngine:
                             #     # AIのほうが近いので、AIとみなす
                             #     data = { 'actin': 'partial', 'content': '' }
                             #     self._fn_callback(data)
-                            #     print( f"[RECOG] AI cancel {partial_text}")
+                            #     print( f"[RECG] AI cancel {partial_text}")
                             #     continue
                             # if noize_vects.length()>=3:
                             #     nz = noize_vects.min_dist( spkvect )
@@ -883,7 +1257,7 @@ class RecognizerEngine:
                             #         # ノイズのほうが近いので、AIとみなす
                             #         data = { 'actin': 'partial', 'content': '' }
                             #         self._fn_callback(data)
-                            #         print( f"[RECOG] Noize cancel {partial_text}")
+                            #         print( f"[RECG] Noize cancel {partial_text}")
                             #         continue
                     #else:
                         # if noize_vects.length()>=3 and user_vects.length()>=3:
@@ -893,7 +1267,7 @@ class RecognizerEngine:
                         #         # ノイズのほうが近いので、AIとみなす
                         #         data = { 'actin': 'partial', 'content': '' }
                         #         self._fn_callback(data)
-                        #         print( f"[RECOG] Noize cancel {partial_text}")
+                        #         print( f"[RECG] Noize cancel {partial_text}")
                         #         continue
 
                 #------------------------------
@@ -906,13 +1280,21 @@ class RecognizerEngine:
                         buf += bytearray(s)
                     # rate 44100 width 2 ja_JP
                     # buffer <bytearray, len() = 882000> type(buffer) <class 'bytearray'> WIDTH 2 RATE 44100
-                    audio_data = sr.AudioData( buf, self.sample_rate, self.sample_width)
-                    actual_result = self.recognizer.recognize_google(audio_data, language='ja_JP', with_confidence=False, show_all=True )
+                    audio_data = sr.AudioData( buf, int(self.sample_rate*0.8), self.sample_width)
+                    lang = self.lang if self.lang else 'ja_JP'
+                    for retry in range(1,0,-1):
+                        actual_result = self.recognizer.recognize_google(audio_data, language=lang, with_confidence=False, show_all=True )
+                        if retry>0 and isinstance(actual_result,list) and len(actual_result)==0:
+                            print(f"[RECG] empty result retry {retry}")
+                            time.sleep(1.0)
+                            continue
+                        break
                     if isinstance(actual_result,list) and len(actual_result)==0:
                         print(f"[RECG] empty result {partial_text}")
                         self._fn_callback( { 'action':'abort','content':''} )
-                        self._add_spkvect( SPK_NOIZE, spkvect )
-                        self._spk_update()
+                        if len(partial_text)<5:
+                            self._add_spkvect( SPK_NOIZE, spkvect )
+                            self._spk_update()
                         continue
                     elif isinstance(actual_result, dict) and len(actual_result.get("alternative", []))>0:
                         if "confidence" in actual_result["alternative"]:
@@ -929,15 +1311,17 @@ class RecognizerEngine:
                             final_len = len(final_text)
                             if final_len<3 or confidence < 0.6:
                                 # ほぼノイズでしょう
-                                print( f"[RECOG] noize {final_text} {confidence}")
+                                print( f"[RECG] noize {final_text} {confidence}")
                                 self._add_spkvect( SPK_NOIZE, spkvect )
                                 self._spk_update()
                                 continue
                             elif not in_speek:
                                 # AIは発声してない
                                 if final_len<5:
+                                    print( f"[RECG] USER/NOIZE {final_text} {confidence}")
                                     self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
                                 else:
+                                    print( f"[RECG] USER {final_text} {confidence}")
                                     self._add_spkvect( SPK_USER, spkvect )
                                 self._spk_update()
                             else:
@@ -945,7 +1329,7 @@ class RecognizerEngine:
                                 #-------------------------------
                                 # 短かったらノイズでしょ
                                 if final_len<5:
-                                    print( f"[RECOG] AI short {final_text}")
+                                    print( f"[RECG] AI short {final_text}")
                                     self._fn_callback( { 'action':'abort','content':''} )
                                     self._add_spkvect( SPK_USER_OR_NOIZE, spkvect )
                                     self._spk_update()
@@ -959,7 +1343,7 @@ class RecognizerEngine:
                                     # AIと判定した
                                     data = { 'actin': 'partial', 'content': '' }
                                     self._fn_callback(data)
-                                    print( f"[RECOG] AI Ngram {sim} {partial_text}")
+                                    print( f"[RECG] AI Ngram {sim} {partial_text}")
                                     self._add_spkvect( SPK_AI, spkvect )
                                     self._spk_update()
                                     continue
@@ -967,13 +1351,14 @@ class RecognizerEngine:
                                 # AIの発話中でAIのベクトルが貯まるまでは識別しない
                                 ai_count = self._len_spkvect(SPK_AI)
                                 if ai_count<=3:
-                                    print( f"[RECOG] AI skip {ai_count}  sim:{sim} text:{final_text} in_speek:{in_speek}")
+                                    print( f"[RECG] AI skip {ai_count}  sim:{sim} text:{final_text} in_speek:{in_speek}")
                                     self._fn_callback( { 'action':'abort','content':''} )
                                     self._add_spkvect( SPK_USER_OR_AI, spkvect )
                                     self._spk_update()
                                     continue
                                 #------------------------------
                                 # ここまできたら、AI発声中に人間がしゃべったんじゃないか？と判定
+                                print( f"[RECG] AI/USER {final_text} {confidence}")
                     else:
                         print(f"[RECG] error response {actual_result}")
                         self._fn_callback( {'action':'error','error': 'invalid response'})
@@ -1033,20 +1418,23 @@ class RecognizerEngine:
                     pass
             self.sample_width = 2
             self.dtype = 'int16'
-            self.block_size = int(self.sample_rate * 0.2) # sample_rateが１秒のブロック数に相当するので 0.2秒のブロックサイズにする
+            self.block_size = int(self.sample_rate * 0.1) # sample_rateが１秒のブロック数に相当するので 0.2秒のブロックサイズにする
 
             self._q_limit = 5 * 10
             self._q_full = False
 
             # voskの設定
+            vosk.SetLogLevel(-1)
             if self.model is None:
                 self.model = RecognizerEngine.get_vosk_model(lang="ja")
             else:
                 self.model = Model(lang=self.model)
             self.vosk: KaldiRecognizer = KaldiRecognizer(self.model, self.sample_rate)
-            spkmodel_path = RecognizerEngine.get_vosk_spk_model()
+            spkmodel_path = RecognizerEngine.get_vosk_spk_model(self.model)
             if spkmodel_path is not None:
                 self.vosk.SetSpkModel( spkmodel_path )
+            #
+            Splitter:VoiceSeg = VoiceSeg()
             #------------------------------------------------------------
             # 検出ループ
             #------------------------------------------------------------
@@ -1057,13 +1445,19 @@ class RecognizerEngine:
                 in_speek:str = None
                 partial_count:int = 0
                 noize_count:int = 0
+                vflg:bool=False
                 # 処理ループ
                 while self._running:
                     # get from queue
                     try:
-                        frame, frame_in_speek = self._wave_queue.get(timeout=1.0)
+                        frame_seg_bytes, frame_in_speek = self._wave_queue.get(timeout=1.0)
                     except:
                         continue
+                    frame_seg_int16 = np.frombuffer( frame_seg_bytes, dtype=np.int16)
+                    f0_lv, wave_int16, mfcc = Splitter.put( frame_seg_int16, self.sample_rate, vflg )
+                    if wave_int16 is None:
+                        continue
+                    frame = wave_int16.tobytes()
                     # バッファに蓄積
                     framebuf.append(frame)
                     # AIが発声した内容を記録
@@ -1075,11 +1469,15 @@ class RecognizerEngine:
                             in_speek += frame_in_speek
                     else:
                         before_in_speek = ""
-                    # 
+                    #
+                    # MFCC
+                    self._mfcc_list[self._mfcc_count] = mfcc
+                    self._mfcc_count = (self._mfcc_count+1) % self._mfcc_sz
+                    #
                     send=None
                     send_text=None
                     spkvect=None
-                    if self.vosk.AcceptWaveform(frame):
+                    if self.vosk.AcceptWaveform(frame) or f0_lv<0:
                         res_text:str = self.vosk.Result()
                         res_obj = json.loads( res_text )
                         rawtxt:str = BotUtils.NoneToDefault(res_obj.get('text'))
@@ -1113,6 +1511,7 @@ class RecognizerEngine:
                                 print( f"[VOSK] no spkvect {txt} // {send_text}")
                                 if before_notify:
                                     self._ats_queue.put( (None,'',None,None) )
+                        vflg = False 
                         before_notify = ""
                         in_speek = None
                         before_in_speek = None
@@ -1121,6 +1520,8 @@ class RecognizerEngine:
                         partial_count += 1
                         res_obj = json.loads( self.vosk.PartialResult() )
                         txt:str = BotUtils.NoneToDefault(res_obj.get('partial'))
+                        if len(txt)>0:
+                            vflg=True
                         if txt != before_notify:
                             print( f"[VOSK] partial {txt} // {in_speek}")
                             before_notify = txt
@@ -1149,10 +1550,11 @@ class RecognizerEngine:
             model_file = [model for model in model_file_list if re.match(rf"vosk-model-small-{lang}", model)]
             if model_file != []:
                 return Model(str(Path(directory, model_file[0])))
-        return None
+        m:Model = Model(lang=lang)
+        return m
 
     @staticmethod
-    def get_vosk_spk_model():
+    def get_vosk_spk_model(m:Model=None):
         for directory in vosk.MODEL_DIRS:
             if directory is None or not Path(directory).exists():
                 continue
@@ -1160,7 +1562,13 @@ class RecognizerEngine:
             model_file = [model for model in model_file_list if re.match(r"vosk-model-spk-", model)]
             if model_file != []:
                 return SpkModel(str(Path(directory, model_file[0])))
+            
+        p:str = m.get_model_path('vosk-model-spk-0.4',None) if m is not None else None
+        if p is not None:
+            return SpkModel( p )
         return None
+    
+    # https://qiita.com/adumaru0828/items/a95de3a0fbfe54f51953
 
 class BotUtils:
 
@@ -1403,6 +1811,15 @@ class BotUtils:
             return str(value).strip()
 
     @staticmethod
+    def str_strip_or_default( value:str, default:str=None ) -> str:
+        if value is None:
+            return default
+        value = str(value).strip()
+        if len(value)==0:
+            return default
+        return value
+
+    @staticmethod
     def is_empty( value ) -> bool:
         return value is None or len(str(value).strip())<=0
 
@@ -1516,6 +1933,36 @@ class BotUtils:
                 return svalue
         return default
 
+    @staticmethod
+    def decode_utf8( text:str ) ->str:
+        try:
+            # 文字列をバイト列に変換
+            byte_data = bytes(text, 'latin1')
+            # UTF-8でデコード
+            return byte_data.decode('utf-8')
+        except:
+            return text
+
+    @staticmethod
+    def find_first_responsive_host(hostname_list:list[str], port:int=None, timeout:float=1.0) ->str:
+        uniq:set = set()
+        for sv in hostname_list:
+            url = f"{sv}"
+            if not url.startswith("http://") and not url.startswith("https://"):
+                url = "http://"+url
+            if port is not None:
+                url += f":{port}"
+            if url not in uniq:
+                uniq.add(url)
+                try:
+                    response = requests.get(url, timeout=timeout)
+                    if response.status_code == 200 or response.status_code == 404:
+                        return url
+                except (requests.ConnectionError, requests.Timeout):
+                    continue
+
+        return None
+
 class Ngram:
     def __init__( self, text:str, N:int=2 ):
         self._text = text
@@ -1590,5 +2037,11 @@ def test():
     res = bot.Completion( "元気？")
     print( res )
 
+def test2():
+    txt_list = [ "ああああ", "あああ\nいいいい", "ああああ\n```こーど\nブロック```\nだよん"]
+    for txt in txt_list:
+        lines = TtsEngine.split_talk_text( txt )
+        print( lines )
+
 if __name__ == "__main__":
-    test()
+    test2()

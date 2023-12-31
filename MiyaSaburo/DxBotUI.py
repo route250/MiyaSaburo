@@ -7,7 +7,7 @@ from tkinter import scrolledtext
 from tkinter.scrolledtext import ScrolledText
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from DxBotUtils import BotCore, BotUtils
+from DxBotUtils import BotCore, BotUtils, TtsEngine
 
 def exp_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
     def create_prompt():
@@ -88,6 +88,7 @@ def chat_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
     selected_att = tk.StringVar()
     selected_att.set(att_opts[0])
     tts_opts=['No talk', 'VOICE BOX', 'OpenAI']
+    tts_opts=['No talk'] + [ x[0] for x in TtsEngine.VoiceList]
     selected_tts = tk.StringVar()
     selected_tts.set(tts_opts[0])
 
@@ -184,10 +185,8 @@ def chat_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
 
     def _fn_tts_chenged(ev):
         value = tts_menu.get()
-        if value == tts_opts[1]:
-            bot.setTTS(True)
-        else:
-            bot.setTTS(False)
+        speaker_id = next((x[1] for x in TtsEngine.VoiceList if x[0] == value), None)
+        bot.setTTS(speaker_id)
 
     tts_menu.bind("<<ComboboxSelected>>", _fn_tts_chenged )
 
@@ -229,13 +228,13 @@ def chat_ui( update_queue:queue.Queue, root, parent, bot:BotCore ):
         message:str = json.dumps( data, indent=4, ensure_ascii=False, sort_keys=True )
         info_textarea.delete('1.0',tk.END)
         info_textarea.insert('1.0',message)
-    bot.info_callback = lambda data: update_info(data)
+    bot.info_callback = lambda data: update_queue.put( (update_info,{"data": data}) )
 
     def update_log( message ):
         text:str = BotUtils.to_str(message)
         log_textarea.insert(tk.END, "\n"+text)
 
-    bot.log_callback = lambda message: update_log(message)
+    bot.log_callback = lambda message: update_queue.put( (update_log,{'message':message}) )
 
 def debug_ui( bot: BotCore ):
     # キューの作成

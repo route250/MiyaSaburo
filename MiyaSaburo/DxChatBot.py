@@ -67,6 +67,7 @@ class DxChatBot(BotCore):
         # チャットメッセージ
         self.mesg_list:list[ChatMessage]=[]
         self.next_message:ChatMessage = None
+        self.chat_tools = None
         self.last_user_message_time:float = 0
         # UIへのコールバック
         self._chat_callback = None
@@ -97,6 +98,8 @@ class DxChatBot(BotCore):
 
     def stop(self) ->None:
         self.tts_cancel()
+        self.set_recg_callback(None,None)
+        self.setTTS(False)
         with self.lock:
             try:
                 if self._tm_timer is not None:
@@ -178,9 +181,11 @@ class DxChatBot(BotCore):
     def state_event(self, before, count, after ) ->None:
         pass
 
-    def setTTS(self, sw:bool = False ):
-        if sw:
-            self.tts = TtsEngine( submit_task = self.submit_task, talk_callback=self._fn_tts_callback )
+    def setTTS(self, speaker_id=None ):
+        if speaker_id:
+            self.tts = TtsEngine( speaker=speaker_id, submit_task = self.submit_task, talk_callback=self._fn_tts_callback )
+            if self.att:
+                self.att.set_lang( TtsEngine.id_to_lang( speaker_id) )
         else:
             self.tts = None
 
@@ -216,6 +221,8 @@ class DxChatBot(BotCore):
             self._plot_callback = plot_callback
             if self.att is None:
                 self.att = RecognizerEngine()
+                if self.tts:
+                    self.att.set_lang( TtsEngine.id_to_lang( self.tts.speaker) )
                 self.att.start()
                 self.att._callback = self._fn_recg_callback
         else:
@@ -378,7 +385,7 @@ class DxChatBot(BotCore):
 
         # if json_fmt is None:
         #     json_fmt = { '考察': '...', 'topic': '...', 'serif': '...'}
-        res_text = self.ChatCompletion( message_list, temperature=temperature, json_fmt=json_fmt)
+        res_text, tool_calls = self.ChatCompletion2( message_list, temperature=temperature, tools=self.chat_tools, json_fmt=json_fmt)
 
         return res_text
 
