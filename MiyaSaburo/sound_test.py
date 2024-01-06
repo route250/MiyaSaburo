@@ -1,4 +1,7 @@
+import math
 import traceback
+from queue import Queue, Empty
+import time
 import tkinter as tk
 from tkinter import filedialog
 import tkinter as tk
@@ -9,8 +12,14 @@ import numpy as np
 import threading
 import wave
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 import pyworld as pw
 import librosa
+import vosk
+from vosk import Model, KaldiRecognizer
+from DxBotUtils import RecognizerEngine
+
+vosk.SetLogLevel(-1)
 
 # 録音機能のクラス
 class Recorder:
@@ -23,12 +32,21 @@ class Recorder:
         self.channels:int = channels
         self.duratio:int = duration
         self.recording:bool = False
-        self.playing:bool = False
-        self.data:np.ndarray = None
         self.frx:np.ndarray = None
         self.duration:int = 60
-        self.data_pos:int = 0
+
+        self.wave_buf:np.ndarray = None
+        self.wave_pos:int = 0
         self.data_gain:float = 1.0
+
+        self.play_reset()
+        self.model = None
+        self.vosk = None
+
+    def play_reset(self):
+        self.stop_playback()
+        self.play_pos = -1
+        self.play_time = -1.0
 
     def select_input_device(self):
         try:
@@ -40,6 +58,19 @@ class Recorder:
                 self.input_device_info = None
         except Exception as err:
             traceback.print_exc()
+
+    def load_recording(self,filename):
+        if filename:
+            with wave.open(filename, 'rb') as wf:
+                self.play_reset()
+                self.samplerate = int(wf.getframerate())
+                self.channels = int(wf.getnchannels())
+                frames = wf.readframes(wf.getnframes())
+                self.wave_buf = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
+                self.wave_buf = self.wave_buf.reshape(-1, self.channels)
+                self.data_gain = 1.0
+                min,max = self.get_min_max()
+                print(f"loaded min:{min} max:{max}")
 
     def start_recording(self):
         try:
@@ -55,25 +86,26 @@ class Recorder:
 
     def _th_record(self):
         try:
+            self.play_reset()
             self.select_input_device()
             if self.input_device_info is None:
                 return
             self.samplerate=int(self.input_device_info['default_samplerate'])
             self.channels=1
             rec_max = self.duration * self.samplerate
-            self.data_pos = 0
-            self.data = np.zeros((rec_max, self.channels), dtype=np.float32)
+            self.wave_pos = 0
+            self.wave_buf = np.zeros((rec_max, self.channels), dtype=np.float32)
             with sd.InputStream( samplerate=self.samplerate, blocksize=8000, device=self.input_device, channels=self.channels, callback=self._fn_audio_callback ):
                 while self.recording:
                     sd.sleep( 1000 )
-                    print(f"len:{self.data_pos}/{len(self.data)}")
-                    np.max( np.abs( self.data ) )
-            self.data = self.data[:self.data_pos]
+                    print(f"len:{self.wave_pos}/{len(self.wave_buf)}")
+                    np.max( np.abs( self.wave_buf ) )
+            self.wave_buf = self.wave_buf[:self.wave_pos]
             min,max = self.get_min_max()
             self.data_gain = 1.0
             if max<0.6:
                 self.data_gain = 0.6/max
-                self.data = self.data * self.data_gain
+                self.wave_buf = self.wave_buf * self.data_gain
             print(f"loaded min:{min} max:{max} gain:{self.data_gain}")
 
         except Exception as err:
@@ -83,13 +115,13 @@ class Recorder:
             print(f"[record]finally")
 
     def get_min_max(self):
-        min = np.min( np.abs(self.data) )
-        max = np.max( np.abs(self.data) )
+        min = np.min( np.abs(self.wave_buf) )
+        max = np.max( np.abs(self.wave_buf) )
         return min,max
 
     def calculate_f0(self, frame_period=5.0):
         """ F0（基本周波数）を計算する """
-        mono = self.data[:,0]
+        mono = self.wave_buf[:,0]
         mono_float = mono.astype(np.float64)
         _f0, t = pw.dio(mono_float, self.samplerate, frame_period=frame_period)
         f0 = pw.stonemask(mono_float, _f0, t, self.samplerate)
@@ -106,7 +138,7 @@ class Recorder:
         return vuv_ratio
 
     def calculate_f0rate( self ):
-        mono = self.data[:,0].astype(np.float64)
+        mono = self.wave_buf[:,0].astype(np.float64)
         block_size = 8000
         data_len = len( mono )
         f0_rate_array = np.zeros( data_len )
@@ -120,12 +152,12 @@ class Recorder:
         try:
             if self.recording:
                 in_length = len(indata)
-                next_pos = self.data_pos + in_length
-                if next_pos < len(self.data):
-                    self.data[self.data_pos:next_pos] = indata
-                    self.data_pos = next_pos
+                next_pos = self.wave_pos + in_length
+                if next_pos < len(self.wave_buf):
+                    self.wave_buf[self.wave_pos:next_pos] = indata
+                    self.wave_pos = next_pos
                 else:
-                    print(f"[callback]over {in_length} {next_pos} {len(self.data)}")
+                    print(f"[callback]over {in_length} {next_pos} {len(self.wave_buf)}")
                     self.recording=False
         except Exception as err:
             self.recording=False
@@ -137,20 +169,20 @@ class Recorder:
 
     def save_recording(self, filename):
         try:
-            if self.data is not None:
+            if self.wave_buf is not None:
                 with wave.open(filename, 'wb') as wf:
                     wf.setnchannels(self.channels)
                     wf.setsampwidth(2)
                     wf.setframerate(self.samplerate)
-                    wf.writeframes((self.data * 32767).astype(np.int16).tobytes())
+                    wf.writeframes((self.wave_buf * 32767).astype(np.int16).tobytes())
         except Exception as err:
             traceback.print_exc()
         finally:
             self.playing = False
 
-    def play_recording(self):
+    def play_recordissng(self):
         try:
-            if self.data is not None and not self.playing and not self.recording:
+            if self.wave_buf is not None and not self.playing and not self.recording:
                 self.playing = True
                 thread = threading.Thread(target=self._th_play)
                 thread.start()
@@ -159,24 +191,76 @@ class Recorder:
         finally:
             self.playing = False
 
-    def _th_play(self):
+    def set_play_position(self,time):
+        pos = int( self.samplerate * time )
+        if pos < 0:
+            pos = 0
+        elif len(self.wave_buf)<=pos:
+            pos = len(self.wave_buf)-1
+        tm = pos / self.samplerate
+        print(f"set {time:.3f} {pos} {tm:.3f}")
+        self.play_pos = pos
+        self.play_time = tm
+
+    def play_recording(self):
         try:
-            if self.data is not None:
+            if self.wave_buf is not None and not self.playing:
                 self.playing = True
-                sd.play(self.data, self.samplerate)
-                sd.wait(ignore_errors=False)
+                blksz = self.samplerate // 10
+                if self.play_pos<0 or len(self.wave_buf)<=self.play_pos:
+                    self.play_pos = 0
+                    self.play_time = 0.0
+                self.play_stream = sd.OutputStream(samplerate=self.samplerate, channels=self.channels, blocksize=blksz, callback=self._audio_play_callback)
+                self.play_stream.start()
         except Exception as err:
             traceback.print_exc()
-        finally:
-            print(f"[_th_play]finally")
-            self.playing = False
+            self.stop_playback()
+
+    def _audio_play_callback(self, outdata, frames, time, status):
+        try:
+            if status:
+                print(status)
+            outdata.fill(0)
+            ln = len(self.wave_buf)
+            if self.playing and 0<=self.play_pos and self.play_pos<ln:
+                sz = len(outdata)
+                next_pos = min( ln, self.play_pos + sz)
+                fn = next_pos - self.play_pos
+                # print( f"buff {sz} fr:{frames} time:{time} {self.play_pos} - {next_pos} / {ln}")
+                outdata[:fn] = self.wave_buf[self.play_pos:next_pos]
+                self.play_pos = next_pos
+                self.play_time = next_pos / self.samplerate
+            else:
+                print(f"callback stop {self.playing} {self.play_pos} {ln}")
+                outdata.fill(0)
+                raise sd.CallbackStop
+        except sd.CallbackStop as ex:
+            self.stop_playback()
+            raise ex
+        except Exception as ex:
+            traceback.print_exc()
+            self.stop_playback()
+            raise ex
 
     def stop_playback(self):
         try:
-            if self.playing:
-                sd.stop(ignore_errors=False)
-        except Exception as err:
-            traceback.print_exc()
+            self.playing = False
+            if self.play_stream is not None:
+                self.play_stream.close()
+        except Exception:
+                pass
+        finally:
+            self.playing = False
+            self.play_stream = None
+
+    def aplay_time(self):
+        try:
+            if self.play_stream is not None:
+                t = self.play_stream.time
+                return t
+        except:
+            pass
+        return -1.0
 
     def amplify_audio(self, gain):
         """
@@ -185,17 +269,39 @@ class Recorder:
         :param gain: 適用するゲイン（増幅係数）
         :return: 音量が増幅されたオーディオデータ
         """
-        amplified_data = self.data * gain
+        amplified_data = self.wave_buf * gain
         # クリッピング: 音量を -1.0 から 1.0 の範囲に保つ
         np.clip(amplified_data, -1.0, 1.0, out=amplified_data)
-        self.data = amplified_data
+        self.wave_buf = amplified_data
+
+    def fn_vosk(self):
+        try:
+            # voskの設定
+            if self.model is None:
+                self.model = RecognizerEngine.get_vosk_model(lang="ja")
+            else:
+                self.model = Model(lang=self.model)
+            self.vosk: KaldiRecognizer = KaldiRecognizer(self.model, self.samplerate)
+            spkmodel_path = RecognizerEngine.get_vosk_spk_model(self.model)
+            if spkmodel_path is not None:
+                self.vosk.SetSpkModel( spkmodel_path )
+            mono = self.wave_buf[:,0] * 32767.0
+            mono16 = mono.astype(np.int16)
+            b = mono16.tobytes()
+            self.vosk.AcceptWaveform( b )
+            txt = self.vosk.FinalResult()
+            print(txt)
+        except:
+            traceback.print_exc()
 
 # GUIのクラス
 class RecordingApp:
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, root:tk.Tk):
+        self.root:tk.Tk = root
         self.recorder = Recorder()
         self.setup_ui()
+        self.play_line = None
+        self.play_line_time = -1
 
     def setup_ui(self):
         self.root.title("Audio Recorder")
@@ -226,15 +332,18 @@ class RecordingApp:
         self.plot_button = tk.Button(control_frame, text="Plot Waveform", command=self.plot_waveform)
         self.plot_button.pack()
 
+        self.plot_button = tk.Button(control_frame, text="vosk", command=self.fn_vosk)
+        self.plot_button.pack()
+
         # グラフ表示用のフレームを作成
         self.graph_frame = ttk.Frame(self.root)
         self.graph_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        fig, (ax1,axB) = plt.subplots( 2,1, figsize=(10, 8))
+        fig, (axA1,axB) = plt.subplots( 2,1, figsize=(10, 8))
         self.fig = fig
-        self.ax1 = ax1
-        self.ax2 = self.ax1.twinx()
-        self.ax3 = self.ax1.twinx()
+        self.axA1 = axA1
+        self.axA2 = self.axA1.twinx()
+        self.axA3 = self.axA1.twinx()
         self.axB = axB
 
         # グラフをTkinterウィンドウに埋め込む
@@ -242,12 +351,42 @@ class RecordingApp:
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        # マウスイベント
+        self.canvas.mpl_connect('button_press_event', self.on_click)
+        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.canvas.mpl_connect('button_release_event', self.on_release)
+        self.dragging = False
+
+    def on_click(self, event):
+        # 線の近くでマウスがクリックされたかチェック
+        on_axes = event.inaxes == self.axA1 or event.inaxes == self.axA2 or event.inaxes == self.axA3
+        if on_axes:
+            xdata = self.play_line.get_xdata() if self.play_line is not None else None
+            if xdata is None or len(xdata)==0:
+                self.recorder.set_play_position(event.xdata)
+                self.dragging = True
+            elif abs(event.xdata-xdata[0])<0.1:
+                self.dragging = True
+
+    def on_motion(self, event):
+        # ドラッグ中に線を移動
+        if self.dragging and event.xdata:
+            self.recorder.set_play_position(event.xdata)
+
+    def on_release(self, event):
+        # マウスのリリースでドラッグ終了
+        if self.dragging:
+            self.dragging = False
+            # 再生位置の更新
+            if event.xdata:
+                self.recorder.set_play_position(event.xdata)
 
     def start_recording(self):
         self.recorder.start_recording()
 
     def stop_recording(self):
         self.recorder.stop_recording()
+        self.plot_waveform(False)
 
     def play_recording(self):
         thread = threading.Thread(target=self.recorder.play_recording)
@@ -264,72 +403,84 @@ class RecordingApp:
     def load_recording(self):
         filename = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
         if filename:
-            with wave.open(filename, 'rb') as wf:
-                self.recorder.samplerate = int(wf.getframerate())
-                self.recorder.channels = int(wf.getnchannels())
-                frames = wf.readframes(wf.getnframes())
-                self.recorder.data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767
-                self.recorder.data = self.recorder.data.reshape(-1, self.recorder.channels)
-                self.recorder.data_gain = 1.0
-                min,max = self.recorder.get_min_max()
-                print(f"loaded min:{min} max:{max}")
+            self.recorder.load_recording(filename)
+            self.plot_waveform(False)
 
-    def plot_waveform(self):
+    def fn_init_anim(self):
+        # アニメーションの初期化に必要な処理
+        self.play_line.set_data([], [])
+        return self.play_line,
+
+    def fn_animate(self, i):
+        # アニメーションの各フレームでの更新処理
+        current_time = self.recorder.play_time
+        if self.play_line_time != current_time:
+            if current_time>=0:
+                self.play_line.set_data([current_time, current_time], [self.axA1.get_ylim()])
+            else:
+                self.play_line.set_data([], [])
+        return self.play_line,
+
+    def plot_waveform(self, full=True):
         """ 録音されたデータの波形とF0をプロットする """
 
-        self.ax1.clear()
-        self.ax2.clear()
-        self.ax3.clear()
+        self.axA1.clear()
+        self.axA2.clear()
+        self.axA3.clear()
+        self.axB.clear()
 
-        self.ax1.set_xlabel('Time (s)')
-        self.ax1.set_ylabel('Amplitude', color='b')
-        self.ax1.tick_params('y', colors='b')
-        self.ax1.set_ylim(-1,1)
+        self.axA1.set_xlabel('Time (s)')
+        self.axA1.set_ylabel('Amplitude', color='b')
+        self.axA1.tick_params('y', colors='b')
+        self.axA1.set_ylim(-1,1)
 
-        self.ax2.set_ylabel('Frequency (Hz)', color='r')
-        self.ax2.tick_params('y', colors='r')
+        self.axA2.set_ylabel('Frequency (Hz)', color='r')
+        self.axA2.tick_params('y', colors='r')
 
-        self.ax3.spines['right'].set_position(('outward', 40))  # Y軸の位置を調整
-        self.ax3.set_ylabel('Coefficients', color='g')
-        self.ax3.tick_params('y', colors='g')
-        self.ax3.set_ylim(0,1)
+        self.axA3.spines['right'].set_position(('outward', 40))  # Y軸の位置を調整
+        self.axA3.set_ylabel('Coefficients', color='g')
+        self.axA3.tick_params('y', colors='g')
+        self.axA3.set_ylim(0,1)
 
-        if self.recorder.data is not None and len(self.recorder.data) > 0:
+        if self.recorder.wave_buf is not None and len(self.recorder.wave_buf) > 0:
             # 波形をプロット
-            waveform = self.recorder.data[:, 0] if self.recorder.channels > 1 else self.recorder.data
+            waveform = self.recorder.wave_buf[:, 0] if self.recorder.channels > 1 else self.recorder.wave_buf
             times = np.arange(len(waveform)) / float(self.recorder.samplerate)
-            self.ax1.plot(times, waveform, label='Waveform', color='b')
+            self.axA1.plot(times, waveform, label='Waveform', color='b')
 
-            # F0を計算し、プロット（別のY軸を使用）
-            f0, t = self.recorder.calculate_f0()
-            self.ax2.plot(t, f0, label='F0', color='r')
+            # 再生位置を示す線の初期化
+            self.play_line, = self.axA1.plot([], [], 'r', linewidth=2)  # 初期化（空の線）
+            # FuncAnimationの設定
+            self.anim = FuncAnimation(self.fig, self.fn_animate, init_func=self.fn_init_anim, blit=True)
 
-            # 係数をプロット（さらに別のY軸を使用）
-            f0r = self.recorder.calculate_f0rate()
-            # ここに係数のデータをプロットするコードを追加
-            self.ax3.plot(times, f0r, label='Coefficients', color='g')
+            if full:
+                # F0を計算し、プロット（別のY軸を使用）
+                f0, t = self.recorder.calculate_f0()
+                self.axA2.plot(t, f0, label='F0', color='r')
 
-            # MFCCを計算し、プロット
-            # この部分は実際のMFCCデータに合わせて調整してください
-            # 例: mfccs = librosa.feature.mfcc(waveform, sr=self.recorder.samplerate)
-            hop_length = 512
-            ff = self.recorder.data[:,0].astype(np.float64)
-            mfccs = librosa.feature.mfcc(y=ff, sr=self.recorder.samplerate, hop_length=hop_length)
-            # MFCCの各フレームの時間を計算
-            mfcc_times = librosa.frames_to_time(np.arange(mfccs.shape[1]), sr=self.recorder.samplerate, hop_length=hop_length)
-            img = self.axB.imshow(mfccs, aspect='auto', origin='lower', extent=[mfcc_times.min(), mfcc_times.max(), 0, mfccs.shape[0]])
-            self.axB.set_ylabel('MFCC')
-            self.axB.set_xlabel('Time (s)')
-            #self.fig.colorbar(img,ax=self.axB)
+                # 係数をプロット（さらに別のY軸を使用）
+                f0r = self.recorder.calculate_f0rate()
+                # ここに係数のデータをプロットするコードを追加
+                self.axA3.plot(times, f0r, label='Coefficients', color='g')
 
-            # グラフをTkinterウィンドウに埋め込む
-            #canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
-            self.canvas.draw()
-            #canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
+                # MFCCを計算し、プロット
+                # この部分は実際のMFCCデータに合わせて調整してください
+                # 例: mfccs = librosa.feature.mfcc(waveform, sr=self.recorder.samplerate)
+                hop_length = 512
+                ff = self.recorder.wave_buf[:,0].astype(np.float64)
+                mfccs = librosa.feature.mfcc(y=ff, sr=self.recorder.samplerate, hop_length=hop_length)
+                # MFCCの各フレームの時間を計算
+                mfcc_times = librosa.frames_to_time(np.arange(mfccs.shape[1]), sr=self.recorder.samplerate, hop_length=hop_length)
+                img = self.axB.imshow(mfccs, aspect='auto', origin='lower', extent=[mfcc_times.min(), mfcc_times.max(), 0, mfccs.shape[0]])
+                self.axB.set_ylabel('MFCC')
+                self.axB.set_xlabel('Time (s)')
+                #self.fig.colorbar(img,ax=self.axB)
         else:
             print("No data to plot.")
-
+        self.canvas.draw()
+    
+    def fn_vosk(self):
+        self.recorder.fn_vosk()
 
 # メインアプリケーションの実行
 def main():
