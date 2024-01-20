@@ -18,6 +18,8 @@ import librosa
 import vosk
 from vosk import Model, KaldiRecognizer
 from DxBotUtils import RecognizerEngine
+import math
+import json
 
 vosk.SetLogLevel(-1)
 
@@ -40,7 +42,8 @@ class Recorder:
         self.data_gain:float = 1.0
 
         self.play_reset()
-        self.model = None
+        self.model_lang = None
+        self.model_spk = None
         self.vosk = None
 
     def play_reset(self):
@@ -70,7 +73,7 @@ class Recorder:
                 self.wave_buf = self.wave_buf.reshape(-1, self.channels)
                 self.data_gain = 1.0
                 min,max = self.get_min_max()
-                print(f"loaded min:{min} max:{max}")
+                print(f"loaded rate:{self.samplerate} ch:{self.channels} min:{min} max:{max}")
 
     def start_recording(self):
         try:
@@ -198,7 +201,7 @@ class Recorder:
         elif len(self.wave_buf)<=pos:
             pos = len(self.wave_buf)-1
         tm = pos / self.samplerate
-        print(f"set {time:.3f} {pos} {tm:.3f}")
+        #print(f"set {time:.3f} {pos} {tm:.3f}")
         self.play_pos = pos
         self.play_time = tm
 
@@ -274,23 +277,153 @@ class Recorder:
         np.clip(amplified_data, -1.0, 1.0, out=amplified_data)
         self.wave_buf = amplified_data
 
-    def fn_vosk(self):
+    def fn_vosk01(self):
         try:
             # voskの設定
-            if self.model is None:
-                self.model = RecognizerEngine.get_vosk_model(lang="ja")
+            if self.model_lang is None:
+                self.model_lang = RecognizerEngine.get_vosk_model(lang="ja")
             else:
-                self.model = Model(lang=self.model)
-            self.vosk: KaldiRecognizer = KaldiRecognizer(self.model, self.samplerate)
-            spkmodel_path = RecognizerEngine.get_vosk_spk_model(self.model)
+                self.model_lang = Model(lang=self.model_lang)
+            self.vosk: KaldiRecognizer = KaldiRecognizer(self.model_lang, self.samplerate)
+           # self.vosk.SetWords(True)
+            spkmodel_path = RecognizerEngine.get_vosk_spk_model(self.model_lang)
             if spkmodel_path is not None:
                 self.vosk.SetSpkModel( spkmodel_path )
             mono = self.wave_buf[:,0] * 32767.0
             mono16 = mono.astype(np.int16)
-            b = mono16.tobytes()
-            self.vosk.AcceptWaveform( b )
-            txt = self.vosk.FinalResult()
-            print(txt)
+            slen = len(mono16)
+            seg_size = int(self.samplerate * 0.02) # 0.2秒
+            audio_sec = len(mono16) / self.samplerate
+            vst = time.time()
+            res_list = []
+            for idx in range( 0, slen, seg_size ):
+                fr=int(idx/seg_size)
+                seg = mono16[idx:idx+seg_size]
+                b = seg.tobytes()
+                if self.vosk.AcceptWaveform( b ):
+                    res = json.loads(self.vosk.Result())
+                    res['fr'] = fr
+                    res['idx'] = idx
+                    res_list.append( res )
+            res = json.loads(self.vosk.FinalResult())
+            res['fr'] = int(slen/seg_size)
+            res['idx'] = slen
+            res_list.append( res )
+            vet = time.time()
+            vosk_sec = (vet-vst)
+            with open('dbgvosk_output.json','w') as out:
+                json.dump( res_list, out, ensure_ascii=False, indent=4 )
+            print(f"audio: {audio_sec:.3f}(sec) vosk:{vosk_sec:.3f}(sec)")
+        except:
+            traceback.print_exc()
+
+    plist=['start','end']
+    def vosk_words_bugfix(self, obj, frame_offset=0 ) :
+        if obj is None:
+            return
+        result = obj.get('result', obj.get('partial_result') )
+        if result is not None:
+            time_offset = round( frame_offset / self.samplerate, 6 )
+            for word_info in result:
+                for pname in ['start','end']:
+                    val = word_info.get(pname)
+                    if val is not None:
+                        word_info[pname] = round( val - time_offset, 6 )
+
+    def resconvert(self, obj, seg_size, frame_offset=0 ) :
+        if obj is None:
+            return
+        result = obj.get('result', obj.get('partial_result') )
+        if result is not None:
+            time_offset = round( frame_offset / self.samplerate, 6 )
+            for w in result:
+                st = w.get('start')
+                frame_start = int( st * self.samplerate + frame_offset) if st is not None else None
+                seg_start = int( frame_start / seg_size ) if frame_start is not None else None
+                et = w.get('end')
+                frame_end = int( et * self.samplerate + frame_offset) if et is not None else None
+                seg_end = int( frame_end / seg_size ) if frame_end is not None else None
+
+                if seg_start is not None:
+                    w['seg_start'] = seg_start
+                if seg_end is not None:
+                    w['seg_end'] = seg_end
+                if frame_start is not None:
+                    w['frame_start'] = frame_start
+                if frame_end is not None:
+                    w['frame_end'] = frame_end
+                if st is not None:
+                    w['time_start'] = round( st + time_offset, 6 )
+                if et is not None:
+                    w['time_end'] = round( et + time_offset, 6 )
+
+    def create_vosk(self) ->KaldiRecognizer :
+        if self.model_lang is None:
+            self.model_lang = RecognizerEngine.get_vosk_model(lang="ja")
+        if self.model_spk is None:
+            self.model_spk = RecognizerEngine.get_vosk_spk_model(self.model_lang)
+
+        vosk: KaldiRecognizer = KaldiRecognizer(self.model_lang, int(self.samplerate/1) )
+        if self.model_spk is not None:
+            vosk.SetSpkModel( self.model_spk )
+        vosk.SetWords(True)
+        vosk.SetPartialWords(True)
+        return vosk
+
+    def fn_vosk(self):
+        try:
+            # voskの設定
+            wave_mono_float = self.wave_buf[:,0] * 32767.0
+            wave_mono_int16 = wave_mono_float.astype(np.int16)
+            frame_len = len(wave_mono_int16)
+            seg_size = int(self.samplerate * 0.4) # 0.2秒
+            audio_sec = frame_len / self.samplerate
+            vst = time.time()
+            res_list = []
+            vosk = self.create_vosk()
+            adjust = 0
+            for frame_start in range( 0, frame_len, seg_size ):
+                frame_end = min( frame_start+(seg_size*2), frame_len )
+
+                seg_time_start = round( frame_start / self.samplerate, 6 )
+                seg_time_end = round( frame_end / self.samplerate, 6 )
+
+                seg_start = int( frame_start / seg_size )
+                seg_end = int( frame_end / seg_size )
+
+                seg = wave_mono_int16[frame_start:frame_end]
+                b = seg.tobytes()
+                res = None
+                text = ''
+                # if self.vosk.AcceptWaveform( b ):
+                #     res = json.loads(self.vosk.Result())
+                #     text = res.get('text','')
+                # elif idx_end <= slen:
+                #     res = json.loads(self.vosk.PartialResult())
+                #     text = res.get('partial','')
+                # else:
+                #     res = json.loads(self.vosk.FinalResult())
+                #     text = res.get('text','')
+                vosk.AcceptWaveform( b )
+                res = json.loads(vosk.FinalResult())
+                self.vosk_words_bugfix(res,adjust)
+                vosk.Reset()
+                adjust += (frame_end-frame_start)
+                text = res.get('text','')
+                # if text != '':
+                res['time_start'] = seg_time_start
+                res['time_end'] = seg_time_end
+                res['seg_start'] = seg_start
+                res['seg_end'] = seg_end
+                res['frame_start'] = frame_start
+                res['frame_end'] = frame_end
+                self.resconvert(res,seg_size,frame_start)
+                res_list.append( res )
+            vet = time.time()
+            vosk_sec = (vet-vst)
+            with open('dbgvosk_output2.json','w') as out:
+                json.dump( res_list, out, ensure_ascii=False, indent=4 )
+            print(f"audio: {audio_sec:.3f}(sec) vosk:{vosk_sec:.3f}(sec)")
         except:
             traceback.print_exc()
 
@@ -303,7 +436,16 @@ class RecordingApp:
         self.play_line = None
         self.play_line_time = -1
 
+        # ウィンドウを閉じた際にPythonを終了する
+    def close_window(self):
+        self.root.destroy()
+        self.root.quit()
+    
     def setup_ui(self):
+
+        # ウィンドウを閉じるイベントの設定
+        self.root.protocol("WM_DELETE_WINDOW", self.close_window)
+        # タイトル
         self.root.title("Audio Recorder")
 
         # コントロール用のフレームを作成
@@ -334,6 +476,16 @@ class RecordingApp:
 
         self.plot_button = tk.Button(control_frame, text="vosk", command=self.fn_vosk)
         self.plot_button.pack()
+
+        # グラフ表示用のフレームを作成
+        self.pos_frame = ttk.Frame(self.root)
+        self.pos_frame.pack(side=tk.TOP, fill=tk.X, expand=True)
+        self.pos_start = ttk.Entry(self.pos_frame)
+        self.pos_start.pack(side=tk.LEFT)
+        self.pos_end = ttk.Entry(self.pos_frame)
+        self.pos_end.pack(side=tk.LEFT)
+        self.pos_current = ttk.Entry(self.pos_frame)
+        self.pos_current.pack(side=tk.LEFT)
 
         # グラフ表示用のフレームを作成
         self.graph_frame = ttk.Frame(self.root)
@@ -415,8 +567,13 @@ class RecordingApp:
         # アニメーションの各フレームでの更新処理
         current_time = self.recorder.play_time
         if self.play_line_time != current_time:
+            self.pos_start.delete(0,tk.END)
+            self.pos_end.delete(0,tk.END)
+
             if current_time>=0:
                 self.play_line.set_data([current_time, current_time], [self.axA1.get_ylim()])
+                self.pos_start.insert(0,f"{current_time:.3f}")
+                self.pos_end.insert(0,str(self.recorder.play_pos))
             else:
                 self.play_line.set_data([], [])
         return self.play_line,
@@ -451,7 +608,7 @@ class RecordingApp:
             # 再生位置を示す線の初期化
             self.play_line, = self.axA1.plot([], [], 'r', linewidth=2)  # 初期化（空の線）
             # FuncAnimationの設定
-            self.anim = FuncAnimation(self.fig, self.fn_animate, init_func=self.fn_init_anim, blit=True)
+            self.anim = FuncAnimation(self.fig, self.fn_animate, init_func=self.fn_init_anim, blit=True, cache_frame_data=False )
 
             if full:
                 # F0を計算し、プロット（別のY軸を使用）
@@ -490,3 +647,12 @@ def main():
     print(f"[main]exit")
 # アプリケーションを実行
 main()
+
+# はい、すいません
+# どちらまで
+# あのー、なんばグランド花月まで
+# なんばグランド花月？　あーそうですか、千日前の？
+# はい？
+# 千日前の？
+# 千日前、はい
+# そうですよね
