@@ -1,6 +1,7 @@
 import sys,os,time,traceback,threading,json
 from queue import Queue, Empty
-from threading import RLock, Thread
+import heapq
+from threading import Condition, RLock, Thread
 import numpy as np
 import scipy
 import wave
@@ -377,15 +378,14 @@ class VoiceSplitter:
 
         self.thread_lock:RLock = RLock()
         # VSOK処理キューx2
-        self.pip1_sw:int = 0
-        self.pip1:list[Queue] = [Queue(),Queue()]
-        self.pip1_threads:list[Thread] = [None,None]
+        self.pass1_q:Queue = Queue()
+        self.pass1_threads:list[Thread] = [None,None]
         # セグメント結合処理
-        self.pip2_sw = 0
-        self.pip2_before_idx=-1
-        self.pip2_q:list[Queue] = [Queue(),Queue()]
-        self.pip2_thread:Thread = None
-        self.xxxx:VoskSegList = None
+        self.pass2_lock:Condition = Condition()
+        self.pass2_heap = []
+        self.pass2_next_idx = 0
+        self.pass2_thread:Thread = None
+        self.pass2_data:VoskSegList = None
 
     def add_to_buffer(self, array):
         if not isinstance(array, np.ndarray) or array.dtype != np.float32:
@@ -394,14 +394,13 @@ class VoiceSplitter:
             self.buffer = np.concatenate((self.buffer, array))
             ll:int = len(self.buffer)
             while (ll-self.detect_idx)>(self.seg_frames*3):
-                self.pip1[self.pip1_sw].put( self.detect_idx + self.buffer_offset )
+                self.pass1_q.put( self.detect_idx + self.buffer_offset )
                 self.detect_idx += self.seg_frames * 2
-                self.pip1_sw = (self.pip1_sw+1) % len(self.pip1_threads)
         with self.thread_lock:
-            for i in range(0,len(self.pip1_threads)):
-                if self.pip1_threads[i] is None:
+            for i in range(0,len(self.pass1_threads)):
+                if self.pass1_threads[i] is None:
                     t:Thread = Thread( name=f"vosk{i}", target=self._th_vosk, args=(i,) )
-                    self.pip1_threads[i] = t
+                    self.pass1_threads[i] = t
                     t.start()
 
     def create_vosk(self) ->KaldiRecognizer :
@@ -442,10 +441,8 @@ class VoiceSplitter:
             print(f"[vosk{no}]start")
             vosk = self.create_vosk()
             bugfix_frames = 0
-            q_in = self.pip1[no]
-            q_out = self.pip2_q[no]
             while True:
-                index_start = q_in.get( block=True, timeout=1.0 )
+                index_start = self.pass1_q.get( block=True, timeout=1.0 )
                 with self.buffer_lock:
                     s = index_start - self.buffer_offset
                     e = s + self.seg_frames*3
@@ -468,11 +465,11 @@ class VoiceSplitter:
                 res['index'] = index_start
                 vosk.Reset()
                 bugfix_frames += len(wave_mono_int16)
-                q_out.put( res )
+                self._pass2_put( res )
                 with self.thread_lock:
-                    if self.pip2_thread is None:
-                        t = Thread( name='pip2', target=self._th_pip2 )
-                        self.pip2_thread = t
+                    if self.pass2_thread is None:
+                        t = Thread( name='pass2', target=self._th_pass2 )
+                        self.pass2_thread = t
                         t.start()
         except Empty:
             pass
@@ -480,7 +477,7 @@ class VoiceSplitter:
             traceback.print_exc()
         finally:
             with self.thread_lock:
-                self.pip1_threads[no] = None
+                self.pass1_threads[no] = None
             print(f"[vosk{no}]exit")
 
     def _append_json_log(self,res):
@@ -499,30 +496,53 @@ class VoiceSplitter:
             traceback.print_exc()
         self._hist_json=[]
 
-    def _th_pip2(self):
+    def _pass2_put(self, data ):
+        index=data.get('index')
+        if index >=0:
+            idx = index // (self.seg_frames*2)
+            with self.pass2_lock:
+                heapq.heappush(self.pass2_heap, (idx,data) )
+                self.pass2_lock.notify()
+    
+    def _exists_pass1(self):
+        if isinstance(self.pass1_threads,list):
+            for x in self.pass1_threads:
+                if isinstance(x,Thread) and x.is_alive():
+                    return True
+        return False
+        
+    def _pass2_get(self):
+        with self.pass2_lock:
+            while len(self.pass2_heap)==0 or self.pass2_heap[0][0] != self.pass2_next_idx:
+                self.pass2_lock.wait( timeout=1.0 )
+                if not self._exists_pass1():
+                    raise Empty("end?")
+            idx,data = heapq.heappop( self.pass2_heap )
+            self.pass2_next_idx =idx+1
+            return data
+
+    def _th_pass2(self):
         try:
             margin_frames = int( self.samplerate * 0.4 )
             print(f"[voskX]start")
-            vosk_seg_list:VoskSegList = self.xxxx
+            vosk_seg_list:VoskSegList = self.pass2_data
             if vosk_seg_list is None:
                 vosk_seg_list = VoskSegList()
-                self.xxxx = vosk_seg_list
+                self.pass2_data = vosk_seg_list
             while True:
                 try:
-                    res = self.pip2_q[self.pip2_sw].get( block=True, timeout=1.0 )
+                    res = self._pass2_get()
                 except Empty:
                     with self.thread_lock:
-                        if self.pip1_threads[0] is None:
+                        if self._exists_pass1():
+                            continue
+                        else:
                             break
-                self._append_json_log(res)
                 index_start = res.get('index',0)
                 idx = int( index_start / (self.seg_frames*2) )
-                if self.pip2_before_idx>=0 and self.pip2_before_idx+1 != idx:
-                    raise Exception(f"[voskX]invalid index {self.pip2_before_idx} {idx} frame:{index_start}")
-                self.pip2_before_idx = idx
+                self._append_json_log(res)
                 time_start = round( index_start / self.samplerate, 6 )
-                print( f"[voskX]get q:{self.pip2_sw} idx:{idx} frame:{index_start} time {time_start}")
-                self.pip2_sw = (self.pip2_sw+1)%len(self.pip2_q)
+                print( f"[voskX]get idx:{idx} frame:{index_start} time {time_start}")
                 seglist:list[VoskSegment] = vosk_seg_list.get_segment( time_start )
                 for seg in seglist:
                     print(f"voice seg {seg.start} {seg.end}")
@@ -543,7 +563,7 @@ class VoiceSplitter:
             traceback.print_exc()
         finally:
             with self.thread_lock:
-                self.pip2_thread = None
+                self.pass2_thread = None
             self._flush_json_log()
             print(f"[voskX]exit")
 
@@ -720,8 +740,8 @@ def VS_callback(s,e,buf,samplerate):
     time.sleep(1.0)
 
 def main():
-    wave_file = 'nakagawke01.wav'
-    wave_file = 'test2.wav'
+    wave_file = 'testData/nakagawke01.wav'
+    #wave_file = 'testData/test2.wav'
     json_log_file = os.path.splitext(wave_file)[0]+'_log.json'
     if os.path.exists( json_log_file ):
         os.remove( json_log_file)
