@@ -62,11 +62,12 @@ def main():
     人間に用事や話題や話したいことを尋ねる代わりに、{randomtopic}。"""
     messages = []
     while True:
-        text = speech.get_recognized_text()
+        text, confs = speech.get_recognized_text()
         if text:
             messages.append( {'role':'user','content':text})
             request_messages = messages[-10:]
-
+            if 0.0<confs and confs<0.6:
+                request_messages.insert( len(request_messages)-2, {'role':'system','content':f'次のメッセージは、音声認識結果のconfidence={confs}'})
             now=strftime( time.time() )
             pr = prompt
             pr = pr.replace('{datetime}', now )

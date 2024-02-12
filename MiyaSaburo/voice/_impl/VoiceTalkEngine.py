@@ -16,25 +16,26 @@ class VoiceTalkEngine:
         self._status = VoiceTalkEngine.ST_STOPPED
         self._callback = None
         self.text_buf=[]
+        self.text_confidence = 1.0
         self.text_stat=0
-        self.stt:SttEngine = SttEngine( callback=self._stt_callback)
+        self.stt:SttEngine = SttEngine( callback=self._fn_stt_callback)
         self.tts:TtsEngine = TtsEngine( speaker=speaker, talk_callback=self._tts_callback)
 
-    def _fn_callback(self, stat:int, *, listen_text=None, talk_text=None, talk_emotion=None, talk_model=None ):
+    def _fn_callback(self, stat:int, *, listen_text=None, confidence=None, talk_text=None, talk_emotion=None, talk_model=None ):
         if stat == VoiceTalkEngine.ST_LISTEN:
             self.tts.play_beep1()
         elif stat == VoiceTalkEngine.ST_LISTEN_END:
             self.tts.play_beep2()
         if self._callback is not None:
             try:
-                self._callback( stat, listen_text=listen_text, talk_text=talk_text, talk_emotion=talk_emotion, talk_model=talk_model )
+                self._callback( stat, listen_text=listen_text, confidence=None, talk_text=talk_text, talk_emotion=talk_emotion, talk_model=talk_model )
             except:
                 traceback.print_exc()
         else:
             if stat == VoiceTalkEngine.ST_LISTEN:
-                print( f"[VoiceTalkEngine] listen {listen_text}" )
+                print( f"[VoiceTalkEngine] listen {listen_text} {confidence}" )
             elif stat == VoiceTalkEngine.ST_LISTEN_END:
-                print( f"[VoiceTalkEngine] listen {listen_text} __EOT__" )
+                print( f"[VoiceTalkEngine] listen {listen_text} {confidence} __EOT__" )
             elif stat == VoiceTalkEngine.ST_TALK:
                 print( f"[VoiceTalkEngine] talk {talk_text}" )
             elif stat == VoiceTalkEngine.ST_TALK_END:
@@ -51,27 +52,32 @@ class VoiceTalkEngine:
     def get_recognized_text(self):
         if self.text_stat==3 and len(self.text_buf)>0:
             text = ' '.join(self.text_buf)
+            confs = self.text_confidence
             self.text_stat = 0
-            return text
-        return None
+            return text, confs
+        return None,None
 
-    def _stt_callback(self, start_sec, end_sec, stat, texts ):
+    def _fn_stt_callback(self, start_sec, end_sec, stat, texts, confidence ):
         copy_texts = []
+        copy_confidence = 1.0
         s = -1
         if stat==1:
             print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} START")
             s = VoiceTalkEngine.ST_LISTEN
             copy_texts = self.text_buf = []
+            copy_confidence = 1.0
         elif stat==2:
-            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts}")
+            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence}")
             s = VoiceTalkEngine.ST_LISTEN
             copy_texts = self.text_buf = [t for t in texts]
+            copy_confidence = self.text_confidence = confidence
         elif stat==3:
-            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} EOT")
+            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence} EOT")
             self.text_stat = 3
             s = VoiceTalkEngine.ST_LISTEN_END
             copy_texts = self.text_buf = [t for t in texts]
-        self._fn_callback( s, listen_text=copy_texts )
+            copy_confidence = self.text_confidence = confidence
+        self._fn_callback( s, listen_text=copy_texts, confidence=copy_confidence )
 
     def _tts_callback(self, text:str, emotion:int, model:str):
         """音声合成からの通知により、再生中は音声認識を止める"""

@@ -4,8 +4,7 @@ import sounddevice as sd
 
 from .VoiceSplitter import VoiceSplitter
 from .Recognizer import RecognizerGoogle
-from .VoskUtil import NetworkError
-
+from urllib.error import URLError, HTTPError
 
 # 録音機能のクラス
 class SttEngine:
@@ -22,7 +21,8 @@ class SttEngine:
         self.audioinput:sd.InputStream = None
         self.splitter:VoiceSplitter=None
         self.recognizer: RecognizerGoogle = None
-        self.textbuffer:list[str]=[]
+        self.text_list:list[str]=[]
+        self.text_confidence:float = 1.0
         self.networkerror:bool=False
         self._lock:Condition = Condition()
         self._pause:bool = False
@@ -128,10 +128,11 @@ class SttEngine:
             start_sec=round(start_frame/samplerate,6)
             end_sec=round(end_frame/samplerate,6)
             texts=[]
+            confs:float = 1.0
             stat=0
             if len(buf)==1 and buf[0]==1.0:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec) START")
-                if not self.textbuffer:
+                if not self.text_list:
                     texts=[]
                     stat=1
             elif len(buf)>1:
@@ -139,20 +140,23 @@ class SttEngine:
                 timeout=1.0
                 retry = 3
                 try:
-                    txt = self.recognizer.recognizef( buf, timeout=timeout, retry=retry, sample_rate=samplerate )
+                    txt,confidence = self.recognizer.recognizef( buf, timeout=timeout, retry=retry, sample_rate=samplerate )
                     self.networkerror = False
-                    if not txt:
+                    if txt is None or confidence is None:
                         txt = '音声認識の結果が不明瞭'
+                        confidence = 0.0
                     stat=2
-                except NetworkError as ex:
-                    txt ='通信エラーにより音声認識に失敗しました'
+                except (URLError,HTTPError) as ex:
+                    txt = f'通信エラーにより音声認識に失敗しました {type(ex).__name__}:{ex.reason}'
+                    confidence = 0.0
                     if self.networkerror:
                         stat = -1
                     else:
                         self.networkerror = True
                         stat=2
                 except Exception as ex:
-                    txt ='通信エラーにより音声認識に失敗しました'
+                    txt = f'例外により音声認識に失敗しました。 {type(ex).__name__}:{ex.reason}'
+                    confidence = 0.0
                     if self.networkerror:
                         stat = -1
                     else:
@@ -160,16 +164,20 @@ class SttEngine:
                         stat=2
                 #print(f"[google] {self.textbuffer}")
                 if stat==2:
-                        self.textbuffer.append(txt)
-                texts = self.textbuffer
+                        self.text_list.append(txt)
+                        self.text_confidence = min( self.text_confidence, confidence)
+                texts = self.text_list
+                confs = self.text_confidence
             else:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec) EOT")
                 #print(f"[google] {self.textbuffer}")
-                texts=self.textbuffer
+                texts=self.text_list
+                confs = self.text_confidence
                 stat=3
-                self.textbuffer = []
+                self.text_list = []
+                self.text_confidence = 1.0
             if stat>0 and self._callback is not None:
-                self._callback( start_sec, end_sec, stat, texts )
+                self._callback( start_sec, end_sec, stat, texts, confs )
 
         except Exception as err:
             self.recording=False
