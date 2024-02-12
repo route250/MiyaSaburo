@@ -4,6 +4,10 @@ import vosk
 from vosk import Model, KaldiRecognizer, SpkModel
 import numpy as np
 
+class NetworkError(Exception):
+    def __init__(self, *args):
+        super().__init__(*args)
+
 def sound_normalize( audio_data, *, scale:float=0.8, lowcut:float=0 ):
     if isinstance(audio_data,np.ndarray):
         if audio_data.dtype == np.float32:

@@ -1,6 +1,7 @@
 import sys,os,traceback,time,json
 import numpy as np
 import speech_recognition as sr
+from .VoskUtil import sound_float_to_int16, NetworkError
 
 dbg_level=1
 def dbg_print(lv:int,txt:str):
@@ -40,22 +41,26 @@ memo= """
     """
 class RecognizerGoogle:
 
-    def __init__(self, sample_rate:int=16000, width=2, lang='ja_JP'):
+    def __init__(self, timeout=None, sample_rate:int=16000, width=2, lang='ja_JP'):
         self.sr:sr.Recognizer = sr.Recognizer()
+        if timeout is not None:
+            self.sr.operation_timeout = timeout
         self.sample_rate:int = sample_rate
         self.sample_width = width
         self.lang = lang
 
-    def recognizef(self, float_list:list[float], *,sample_rate:int=None, lang:str=None  ):
+    def recognizef(self, float_list:list[float], *,timeout=None, retry=None, sample_rate:int=None, lang:str=None  ):
+        """音声認識 float配列バージョン"""
         floats = np.array(float_list, dtype=np.float32)
-        intdata = np.int16( floats * 32767 )
+        #intdata = np.int16( floats * 32767 )
+        intdata = sound_float_to_int16( floats, scale=0.8, lowcut=0 )
         bytes_data = intdata.tobytes()
         if sample_rate is None:
             sample_rate = self.sample_rate
         audio_data = sr.AudioData( bytes_data, sample_rate, 2 )
-        return self._recognize_audiodata( audio_data, lang=lang )
+        return self._recognize_audiodata( audio_data, timeout=timeout, lang=lang )
 
-    def recognizeb(self, buf:bytes, *, sample_rate:int=None, sample_width:int = None, lang:str=None ):
+    def recognizeb(self, buf:bytes, *, timeout=None, retry=None, sample_rate:int=None, sample_width:int = None, lang:str=None ):
         if sample_rate is None:
             sample_rate = self.sample_rate
         if sample_width is None:
@@ -64,16 +69,33 @@ class RecognizerGoogle:
         audio_data = sr.AudioData( buf, sample_rate, sample_width)
         return self._recognize_audiodata( audio_data, lang=lang )
         
-    def _recognize_audiodata(self, audio_data:sr.AudioData, *, lang:str=None ):
+    def _recognize_audiodata(self, audio_data:sr.AudioData, *, timeout=None, retry=None, lang:str=None ):
         if lang is None:
             lang = self.lang
+        if retry is None:
+            retry = 3
         try:
-            for retry in range(1,0,-1):
-                actual_result = self.sr.recognize_google(audio_data, language=lang, with_confidence=False, show_all=True )
-                if retry>0 and isinstance(actual_result,list) and len(actual_result)==0:
-                    dbg_print(0,f"[RECG] empty result retry {retry}")
-                    time.sleep(1.0)
+            for trycount in range(0, retry+1):
+                before_timeout = self.sr.operation_timeout
+                try:
+                    if timeout is not None:
+                        self.sr.operation_timeout=timeout
+                    actual_result = self.sr.recognize_google(audio_data, language=lang, show_all=True )
+                    if not isinstance(actual_result,dict) or len(actual_result.get('alternative',[]))<1 or not actual_result.get('final',False):
+                        print(f"ERROR:actual_result:{json.dumps(actual_result,ensure_ascii=False)}")
+                        raise sr.exceptions.UnknownValueError('invalid result data')
+                except sr.exceptions.UnknownValueError as ex:
+                    if trycount>0:
+                        return ''
+                    dbg_print(0,f"[RECG] try{trycount} error response {ex}")
                     continue
+                except sr.exceptions.RequestError as ex:
+                    if trycount==retry:
+                        raise ex
+                    dbg_print(0,f"[RECG] try{trycount} error response {ex}")
+                    continue
+                finally:
+                    self.sr.operation_timeout = before_timeout
                 break
             if not actual_result:
                 dbg_print(0,f"[RECG] abort or no result")
@@ -113,9 +135,12 @@ class RecognizerGoogle:
 
         except sr.exceptions.RequestError as ex:
             dbg_print(0,f"[RECG] error response {ex}")
+            raise NetworkError(ex)
         except sr.exceptions.UnknownValueError as ex:
             dbg_print(0,f"[RECG] error response {ex}")
+            raise NetworkError(ex)
         except Exception as ex:
             traceback.print_exc()
+            raise ex
         return None
 

@@ -8,7 +8,9 @@ import openai
 from openai import OpenAI
 
 # sys.path.append('/home/maeda/LLM')
-sys.path.append('/home/maeda/LLM/MiyaSaburo')
+print(f"cwd:{os.getcwd()}")
+print(f"__name__:{__name__}")
+sys.path.append(os.getcwd())
 # sys.path.append('/home/maeda/LLM/MiyaSaburo/MiyaSaburo')
 from MiyaSaburo.voice import VoiceTalkEngine
    
@@ -48,15 +50,15 @@ def main():
 
     openai_llm_model='gpt-3.5-turbo'
     speech:VoiceTalkEngine = VoiceTalkEngine()
+
     speech.start()
 
-    time.sleep(2.0)
-
-    talk_split = [ "。", "、", "!", "！", "?","？"]
+    talk1_split = [ "、", " ", "　" ]
+    talk2_split = [ "。", "!", "！", "?","？", "\n"]
 
     prompt = """現在日時:{datetime} 季節:{season}
     あなたは、知的な18歳の日本人女性です。カジュアルな話し方で、短い返答をします。。
-    議論や詳細説明では長文も話します。
+    議論や詳細説明ではカジュアルな長文も話します。
     人間に用事や話題や話したいことを尋ねる代わりに、{randomtopic}。"""
     messages = []
     while True:
@@ -82,7 +84,7 @@ def main():
                 for part in stream:
                     seg = part.choices[0].delta.content or ""
                     buffer += seg
-                    if seg in talk_split:
+                    if seg in talk2_split:
                         print( f"{seg}", end="")
                         speech.add_talk(buffer)
                         buffer = ""

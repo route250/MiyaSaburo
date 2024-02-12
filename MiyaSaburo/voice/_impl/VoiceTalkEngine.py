@@ -21,6 +21,10 @@ class VoiceTalkEngine:
         self.tts:TtsEngine = TtsEngine( speaker=speaker, talk_callback=self._tts_callback)
 
     def _fn_callback(self, stat:int, *, listen_text=None, talk_text=None, talk_emotion=None, talk_model=None ):
+        if stat == VoiceTalkEngine.ST_LISTEN:
+            self.tts.play_beep1()
+        elif stat == VoiceTalkEngine.ST_LISTEN_END:
+            self.tts.play_beep2()
         if self._callback is not None:
             try:
                 self._callback( stat, listen_text=listen_text, talk_text=talk_text, talk_emotion=talk_emotion, talk_model=talk_model )

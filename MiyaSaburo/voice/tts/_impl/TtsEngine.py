@@ -3,7 +3,7 @@ from threading import Thread, Condition, ThreadError
 from concurrent.futures import ThreadPoolExecutor, Future
 from queue import Queue, Empty
 import time
-
+import numpy as np
 import requests
 from requests.adapters import HTTPAdapter
 import httpx
@@ -14,8 +14,33 @@ from openai import OpenAI
 from gtts import gTTS
 from io import BytesIO
 import pygame
+import wave
 
 from ...._impl import utils
+
+# C4(ド) 261.63, D4(レ) 293.66  E4(ミ) 329.63 F4(ファ) 349.23 G4(ソ) 392.00 A4(ラ) 440.00 B4(シ) 493.88 C5(ド) 523.25
+def create_sound(Hz1=440, time=0.3):
+    #再生時間を指定
+    #time=2
+    #周波数を指定
+    #Hz1=300
+    #再生時間を設定
+    sample_rate = 44100
+    n_samples = int(sample_rate * time)
+    # 正弦波を使用してビープ音のサンプルを生成
+    samples = (np.sin(2 * np.pi * np.arange(n_samples) * Hz1 / sample_rate)).astype(np.float32)
+    y = samples * 32767
+    bb = y.astype(np.int16).tobytes()
+
+    # wavファイルを作成してバイナリ形式で保存する
+    wav_io = BytesIO()
+    with wave.open(wav_io, "wb") as wav_file:
+        wav_file.setnchannels(1)  # ステレオ (左右チャンネル)
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(sample_rate)  # サンプリングレート
+        wav_file.writeframes(bb)
+    wav_io.seek(0)  # バッファの先頭にシーク
+    return wav_io.read()
 
 class TtsEngine:
     VoiceList = [
@@ -84,6 +109,8 @@ class TtsEngine:
         self.start_call = talk_callback # 発声開始と完了を通知する
         # pygame初期化済みフラグ
         self.pygame_init:bool = False
+        # beep
+        self.beep_ch:pygame.mixer.Channel  = None
         # 音声エンジン無効時間
         self._disable_gtts: float = 0.0
         self._disable_openai: float = 0.0
@@ -92,6 +119,10 @@ class TtsEngine:
         self._voicevox_url = None
         self._voicevox_port = os.getenv('VOICEVOX_PORT','50021')
         self._voicevox_list = list(set([os.getenv('VOICEVOX_HOST','127.0.0.1'),'127.0.0.1','192.168.0.104','chickennanban.ddns.net']))
+
+        self.sound1 = create_sound(440,0.3)
+        self.sound2 = create_sound(329,0.3)
+        self.sound3 = create_sound(349,0.3)
 
     def submit_task(self, func ) -> Future:
         if self.submit_call is not None:
@@ -356,3 +387,28 @@ class TtsEngine:
                     
             except Exception as ex:
                 traceback.print_exc()
+
+    def play_beep1(self):
+        self._play_beep( self.sound1 )
+
+    def play_beep2(self):
+        self._play_beep( self.sound2 )
+
+    def play_beep3(self):
+        self._play_beep( self.sound3 )
+
+    def _play_beep(self, snd ):
+        try:
+            if not self.pygame_init:
+                pygame.init()
+                pygame.mixer.pre_init(16000,-16,1,10240)
+                pygame.mixer.quit()
+                pygame.mixer.init()
+                self.pygame_init = True
+            if self.beep_ch is not None:
+                self.beep_ch.stop()
+            sound = pygame.mixer.Sound( file=BytesIO(snd))
+            self.beep_ch:pygame.mixer.Channel = sound.play(fade_ms=1)
+            #pygame.time.delay( int(duratin_sec * 1000) )
+        except:
+            traceback.print_exc()

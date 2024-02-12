@@ -4,6 +4,7 @@ import sounddevice as sd
 
 from .VoiceSplitter import VoiceSplitter
 from .Recognizer import RecognizerGoogle
+from .VoskUtil import NetworkError
 
 
 # 録音機能のクラス
@@ -22,7 +23,7 @@ class SttEngine:
         self.splitter:VoiceSplitter=None
         self.recognizer: RecognizerGoogle = None
         self.textbuffer:list[str]=[]
-
+        self.networkerror:bool=False
         self._lock:Condition = Condition()
         self._pause:bool = False
 
@@ -135,12 +136,32 @@ class SttEngine:
                     stat=1
             elif len(buf)>1:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec)")
-                txt = self.recognizer.recognizef( buf, sample_rate=samplerate )
-                txt = txt if txt is not None else '...'
-                self.textbuffer.append(txt)
+                timeout=1.0
+                retry = 3
+                try:
+                    txt = self.recognizer.recognizef( buf, timeout=timeout, retry=retry, sample_rate=samplerate )
+                    self.networkerror = False
+                    if not txt:
+                        txt = '音声認識の結果が不明瞭'
+                    stat=2
+                except NetworkError as ex:
+                    txt ='通信エラーにより音声認識に失敗しました'
+                    if self.networkerror:
+                        stat = -1
+                    else:
+                        self.networkerror = True
+                        stat=2
+                except Exception as ex:
+                    txt ='通信エラーにより音声認識に失敗しました'
+                    if self.networkerror:
+                        stat = -1
+                    else:
+                        self.networkerror = True
+                        stat=2
                 #print(f"[google] {self.textbuffer}")
+                if stat==2:
+                        self.textbuffer.append(txt)
                 texts = self.textbuffer
-                stat=2
             else:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec) EOT")
                 #print(f"[google] {self.textbuffer}")
