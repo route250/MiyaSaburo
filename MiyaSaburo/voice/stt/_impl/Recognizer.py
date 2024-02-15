@@ -151,9 +151,11 @@ class RecognizerGoogle:
 
         # ignore any blank blocks
         actual_result = []
+        count:int = 0
         for line in response_text.split("\n"):
             if not line: continue
-            result = json.loads(line)["result"]
+            data = json.loads(line)
+            result = data.get("result")
             if len(result) != 0:
                 actual_result = result[0]
                 break

@@ -72,10 +72,12 @@ class SttEngine:
             if self.input_device_info is None:
                 return
             self.samplerate=int(self.input_device_info['default_samplerate'])
+            self.samplerate=16000
             self.channels=1
             self.splitter:VoiceSplitter = VoiceSplitter( samplerate=self.samplerate, callback=self._fn_voice_callback )
             self.recognizer = RecognizerGoogle( self.samplerate )
             bs = 8000
+            bs = int( self.samplerate*0.2 )
             self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self.input_device, channels=self.channels, callback=self._fn_audio_callback )
             self.audioinput.start()
 
