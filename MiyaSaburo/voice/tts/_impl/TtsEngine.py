@@ -15,34 +15,52 @@ from gtts import gTTS
 from io import BytesIO
 import pygame
 import wave
+import librosa
 
 from ...._impl import utils
 
-# C4(ド) 261.63, D4(レ) 293.66  E4(ミ) 329.63 F4(ファ) 349.23 G4(ソ) 392.00 A4(ラ) 440.00 B4(シ) 493.88 C5(ド) 523.25
-def create_sound(Hz1=440, time=0.3):
-    #再生時間を指定
-    #time=2
-    #周波数を指定
-    #Hz1=300
-    #再生時間を設定
-    sample_rate = 44100
-    n_samples = int(sample_rate * time)
-    # 正弦波を使用してビープ音のサンプルを生成
-    samples = (np.sin(2 * np.pi * np.arange(n_samples) * Hz1 / sample_rate)).astype(np.float32)
-    y = samples * 32767
-    bb = y.astype(np.int16).tobytes()
+import logging
+logger = logging.getLogger('voice')
 
+def f32_to_wave( audio_f32, *, sample_rate, channels=1 ):
+    y = audio_f32 * 32768
+    audio_bytes = y.astype(np.int16).tobytes()
     # wavファイルを作成してバイナリ形式で保存する
     wav_io = BytesIO()
     with wave.open(wav_io, "wb") as wav_file:
-        wav_file.setnchannels(1)  # ステレオ (左右チャンネル)
+        wav_file.setnchannels(channels)  # ステレオ (左右チャンネル)
         wav_file.setsampwidth(2)  # 16-bit
         wav_file.setframerate(sample_rate)  # サンプリングレート
-        wav_file.writeframes(bb)
+        wav_file.writeframes(audio_bytes)
     wav_io.seek(0)  # バッファの先頭にシーク
-    return wav_io.read()
+    wave_bytes = wav_io.read()
+    return wave_bytes
+
+# C4(ド) 261.63, D4(レ) 293.66  E4(ミ) 329.63 F4(ファ) 349.23 G4(ソ) 392.00 A4(ラ) 440.00 B4(シ) 493.88 C5(ド) 523.25
+def create_wave(Hz=440, time=0.3, sample_rate=16000):
+    data_len = int(sample_rate * time)
+    if Hz > 0:
+        sound = (np.sin(2 * np.pi * np.arange(data_len) * Hz / sample_rate)).astype(np.float32)
+    else:
+        sound = np.zeros(data_len, dtype=np.float32)
+    return sound
+
+def create_sound(sequence):
+    """複数の（周波数、時間）タプルを受け取り、連続する音声データを生成する
+
+    Args:
+        sequence (list of tuples): (Hz, time)のタプルのリスト
+
+    Returns:
+        bytes: 生成された音声データのバイナリ（WAV形式）
+    """
+    sample_rate = 16000
+    sounds = [create_wave(Hz, time, sample_rate) for Hz, time in sequence]
+    combined_sound = np.concatenate(sounds)
+    return f32_to_wave(combined_sound, sample_rate=sample_rate)
 
 class TtsEngine:
+    EOT:str = "<|EOT|>"
     VoiceList = [
         ( "VOICEVOX:四国めたん [あまあま]", 0, 'ja_JP' ),
         ( "VOICEVOX:四国めたん [ノーマル]", 2, 'ja_JP' ),
@@ -120,9 +138,9 @@ class TtsEngine:
         self._voicevox_port = os.getenv('VOICEVOX_PORT','50021')
         self._voicevox_list = list(set([os.getenv('VOICEVOX_HOST','127.0.0.1'),'127.0.0.1','192.168.0.104','chickennanban.ddns.net']))
 
-        self.sound1 = create_sound(440,0.3)
-        self.sound2 = create_sound(329,0.3)
-        self.sound3 = create_sound(349,0.3)
+        self.sound1 = create_sound( [(440,0.3)] )
+        self.sound2 = create_sound( [(329,0.3)] )
+        self.sound3 = create_sound( [(329,1.0),(10,0.5),(349,0.5)] )
 
     def submit_task(self, func ) -> Future:
         if self.submit_call is not None:
@@ -195,7 +213,7 @@ class TtsEngine:
                     talk_id, text, emotion = self.wave_queue.get_nowait()
                 except Exception as ex:
                     if not isinstance( ex, Empty ):
-                        traceback.print_exc()
+                        logger.exception(ex)
                     talk_id=-1
                     text = None
                 if text is None:
@@ -207,7 +225,7 @@ class TtsEngine:
                     audio_bytes, tts_model = self._text_to_audio( text, emotion )
                     self._add_audio( talk_id,text,emotion,audio_bytes,tts_model )
             except Exception as ex:
-                traceback.print_exc()
+                logger.exception(ex)
 
     def _add_audio( self, talk_id:int, text:str, emotion:int, audio_bytes: bytes, tts_model:str=None ) -> None:
         self.play_queue.put( (talk_id,text,emotion,audio_bytes,tts_model) )
@@ -249,12 +267,12 @@ class TtsEngine:
             # wave形式 デフォルトは24kHz
             return res.content, model
         except requests.exceptions.ConnectTimeout as ex:
-            print( f"[VOICEVOX] {type(ex)} {ex}")
+            logger.error( f"[VOICEVOX] {type(ex)} {ex}")
         except requests.exceptions.ConnectionError as ex:
-            print( f"[VOICEVOX] {type(ex)} {ex}")
+            logger.error( f"[VOICEVOX] {type(ex)} {ex}")
         except Exception as ex:
-            print( f"[VOICEVOX] {type(ex)} {ex}")
-            traceback.print_exc()
+            logger.error( f"[VOICEVOX] {type(ex)} {ex}")
+            logger.exception('')
         self._disable_voicevox = time.time()
         return None,None
 
@@ -267,22 +285,33 @@ class TtsEngine:
         try:
             self._disable_gtts = 0
             tts = gTTS(text=TtsEngine.__penpenpen(text,'!!'), lang=lang,lang_check=False )
-            # gTTSはmp3で返ってくる
             with BytesIO() as buffer:
                 tts.write_to_fp(buffer)
-                wave:bytes = buffer.getvalue()
+                buffer.seek(0)
+                # gTTSはmp3で返ってくるので変換
+                y, sr = librosa.load(buffer, sr=None)
+                # 話速を2倍にする（時間伸縮）
+                y_fast = librosa.effects.time_stretch(y, rate=1.5)
+                # ピッチを下げる（ここでは半音下げる例）
+                n_steps = -1  # ピッチを半音下げる
+                y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
+                # 音声データをノーマライズする
+                rate = 1.0 / np.max(np.abs(y_shifted))
+                y_normalized = y_shifted * rate
+                wave:bytes = f32_to_wave(y_normalized, sample_rate=sr )
+                #wave:bytes = buffer.getvalue()
                 del tts
                 return wave,f"gTTS[{lang}]"
         except AssertionError as ex:
             if "No text to send" in str(ex):
                 return None,f"gTTS[{lang}]"
-            print( f"[gTTS] {ex}")
-            traceback.print_exc()
+            logger.error( f"[gTTS] {ex}")
+            logger.exception('')
         except requests.exceptions.ConnectTimeout as ex:
-            print( f"[gTTS] timeout")
+            logger.error( f"[gTTS] timeout")
         except Exception as ex:
-            print( f"[gTTS] {ex}")
-            traceback.print_exc()
+            logger.error( f"[gTTS] {ex}")
+            logger.exception('')
         self._disable_gtts = time.time()
         return None,None
 
@@ -317,14 +346,16 @@ class TtsEngine:
             # openaiはmp3で返ってくる
             return response.content,f"OpenAI:{vc}"
         except requests.exceptions.ConnectTimeout as ex:
-            print( f"[gTTS] timeout")
+            logger.error( f"[gTTS] timeout")
         except Exception as ex:
-            print( f"[gTTS] {ex}")
-            traceback.print_exc()
+            logger.error( f"[gTTS] {ex}")
+            logger.exception('')
         self._disable_openai = time.time()
         return None,None
 
     def _text_to_audio( self, text: str, emotion:int = 0 ) -> bytes:
+        if TtsEngine.EOT==text:
+            return self.sound2,''
         wave: bytes = None
         model:str = None
         if 0<=self.speaker and self.speaker<1000:
@@ -348,7 +379,7 @@ class TtsEngine:
                     talk_id, text, emotion, audio, tts_model = self.play_queue.get_nowait()
                 except Exception as ex:
                     if not isinstance( ex, Empty ):
-                        traceback.print_exc()
+                        logger.exception('')
                     talk_id=-1
                     text = None
                     audio = None
@@ -386,7 +417,7 @@ class TtsEngine:
                         self.start_call( None, emotion, tts_model )
                     
             except Exception as ex:
-                traceback.print_exc()
+                logger.exception('')
 
     def play_beep1(self):
         self._play_beep( self.sound1 )
@@ -411,4 +442,4 @@ class TtsEngine:
             self.beep_ch:pygame.mixer.Channel = sound.play(fade_ms=1)
             #pygame.time.delay( int(duratin_sec * 1000) )
         except:
-            traceback.print_exc()
+            logger.exception('')

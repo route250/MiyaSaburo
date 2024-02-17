@@ -6,6 +6,9 @@ from urllib.error import URLError, HTTPError
 from speech_recognition.audio import AudioData
 from .VoskUtil import sound_float_to_int16, NetworkError
 
+import logging
+logger = logging.getLogger('voice')
+
 dbg_level=1
 def dbg_print(lv:int,txt:str):
     if lv>=dbg_level:
@@ -52,21 +55,21 @@ class RecognizerGoogle:
                 except HTTPError as ex:
                     if trycount==retry:
                         raise ex
-                    dbg_print(0,f"[RECG] try{trycount} error response {ex.reason}")
+                    logger.debug(f"[RECG] try{trycount} error response {ex.reason}")
                     continue
                 except URLError as ex:
-                    dbg_print(0,f"[RECG] try{trycount} error response {ex}")
+                    logger.debug(f"[RECG] try{trycount} error response {ex}")
                     raise ex
                 break
 
             if not actual_result or not isinstance( actual_result, dict ):
-                dbg_print(0,f"[RECG] abort or no result {type(actual_result)}")
+                logger.debug(f"[RECG] abort or no result {type(actual_result)}")
                 return None,None
             aaaa = actual_result.get("alternative", []) or []
             if len(aaaa)==0 or not actual_result.get('final',False): 
                 data=json.dumps( actual_result, indent=2, ensure_ascii=False )
-                dbg_print(0,f"[RECG] error response {actual_result}")
-                print(f"ERROR:actual_result:{json.dumps(actual_result,ensure_ascii=False)}")
+                logger.error(f"[RECG] error response {actual_result}")
+                logger.error(f"ERROR:actual_result:{data}")
                 return None,None
             if "confidence" in aaaa:
                 # return alternative with highest confidence score
@@ -79,13 +82,13 @@ class RecognizerGoogle:
                 # "Your code should not require the confidence field as it is not guaranteed to be accurate, or even set, in any of the results."
                 confidence = best_hypothesis.get("confidence", 1.0) or 0.0
                 final_text = best_hypothesis.get("transcript") or ''
-                dbg_print(0, f"[RECG] {confidence} {final_text}")
+                logger.debug(f"[RECG] {confidence} {final_text}")
                 return final_text, confidence
 
         except (HTTPError,URLError) as ex:
             raise ex
         except Exception as ex:
-            traceback.print_exc()
+            logger.exception('')
             raise ex
         return None,None
 
@@ -126,6 +129,9 @@ class RecognizerGoogle:
         assert key is None or isinstance(key, str), "``key`` must be ``None`` or a string"
         assert isinstance(language, str), "``language`` must be a string"
 
+        if not isinstance(operation_timeout,float) or operation_timeout<1.0:
+            operation_timeout = 5
+
         flac_data = audio_data.get_flac_data(
             convert_rate=None if audio_data.sample_rate >= 8000 else 8000,  # audio samples must be at least 8 kHz
             convert_width=2  # audio samples must be 16-bit
@@ -147,7 +153,7 @@ class RecognizerGoogle:
         except URLError as e:
             raise e
         response_text = response.read().decode("utf-8")
-        print( f"[G] {response.status} {response_text}")
+        logger.debug( f"google recognize response: {response.status} {response_text}")
 
         # ignore any blank blocks
         actual_result = []

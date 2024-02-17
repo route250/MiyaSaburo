@@ -7,6 +7,9 @@ import numpy as np
 import openai
 from openai import OpenAI
 
+import logging
+logger = logging.getLogger('voice')
+
 # sys.path.append('/home/maeda/LLM')
 print(f"cwd:{os.getcwd()}")
 print(f"__name__:{__name__}")
@@ -47,6 +50,31 @@ def get_season():
         return '冬'
 
 def main():
+    from datetime import datetime
+
+    # 現在の日時を取得し、ファイル名に適した形式にフォーマット
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_filename = os.path.join( 'logs',f'test_voice_{current_time}.log')
+    os.makedirs( 'logs', exist_ok=True )
+
+    logger.setLevel(logging.DEBUG)  # ロガーのログレベルを設定
+
+    # ファイル出力用のハンドラを作成
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setLevel(logging.DEBUG)  # ファイルにはERROR以上のログを記録
+
+    # コンソール出力用のハンドラを作成
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)  # コンソールにはINFO以上のログを出力
+
+    # ログメッセージのフォーマットを設定
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # ハンドラをロガーに追加
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
     openai_llm_model='gpt-3.5-turbo'
     speech:VoiceTalkEngine = VoiceTalkEngine()
@@ -56,10 +84,12 @@ def main():
     talk1_split = [ "、", " ", "　" ]
     talk2_split = [ "。", "!", "！", "?","？", "\n"]
 
-    prompt = """現在日時:{datetime} 季節:{season}
-    あなたは、知的な18歳の日本人女性です。カジュアルな話し方で、短い返答をします。。
-    議論や詳細説明ではカジュアルな長文も話します。
-    人間に用事や話題や話したいことを尋ねる代わりに、{randomtopic}。"""
+    prompt = """1. 現在日時:{datetime} 季節:{season}
+2.Role
+あなたは女性型AIです。カジュアルに短いセリフを話して下さい。
+議論や詳細説明など必要な場面では、長文で話します。
+人間に用事や話題や話したいことを尋ねる代わりに、{randomtopic}。
+3.人間の言葉はSTTでテキスト化されて入力されます。認識精度は悪いので、不明な文章が入力されたら聞き直して下さい。"""
     messages = []
     while True:
         text, confs = speech.get_recognized_text()
@@ -86,15 +116,26 @@ def main():
                     seg = part.choices[0].delta.content or ""
                     buffer += seg
                     if seg in talk2_split:
-                        print( f"{seg}", end="")
+                        logger.info( f"{seg}")
                         speech.add_talk(buffer)
                         buffer = ""
                 if buffer:
                     speech.add_talk(buffer)
+                speech.add_talk(VoiceTalkEngine.EOT)
                 time.sleep(2.0)
                 messages.append( {'role':'assistant','content':buffer})
             except:
-                traceback.print_exc()
+                logger.exception('')
+def test():
+    from MiyaSaburo.voice.tts import TtsEngine
+    e = TtsEngine()
+
+    e.play_beep1()
+    time.sleep(1)
+    e.play_beep2()
+    time.sleep(1)
+    e.play_beep3()
+    time.sleep(1)
 
 if __name__ == "__main__":
     main()

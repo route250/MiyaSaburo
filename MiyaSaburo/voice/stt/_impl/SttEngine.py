@@ -6,6 +6,9 @@ from .VoiceSplitter import VoiceSplitter
 from .Recognizer import RecognizerGoogle
 from urllib.error import URLError, HTTPError
 
+import logging
+logger = logging.getLogger('voice')
+
 # 録音機能のクラス
 class SttEngine:
     def __init__(self, *, callback=None, samplerate=16000, channels=1):
@@ -39,9 +42,9 @@ class SttEngine:
                 pass
             if self.splitter is None or self.splitter.set_pause(b):
                 self._pause = b
-                print( f"[VoiceRecognizer] success to set pause {b}")
+                # print( f"[VoiceRecognizer] success to set pause {b}")
             else:
-                print( f"[VoiceRecognizer] failled to set pause {b}")
+                logger.debug( f"[VoiceRecognizer] failled to set pause {b}")
 
     def select_input_device(self):
         try:
@@ -52,7 +55,7 @@ class SttEngine:
             else:
                 self.input_device_info = None
         except Exception as err:
-            traceback.print_exc()
+            logger.exception('')
 
     def start_recording(self):
         try:
@@ -61,7 +64,7 @@ class SttEngine:
             thread = Thread(target=self._th_record)
             thread.start()
         except Exception as err:
-            traceback.print_exc()
+            logger.exception('')
             self.recording = False
         finally:
             pass
@@ -83,7 +86,7 @@ class SttEngine:
 
         except Exception as err:
             self.recording = False
-            traceback.print_exc()
+            logger.exception('')
 
     def stop_recording(self):
         self.recording = False
@@ -120,8 +123,8 @@ class SttEngine:
                 self.splitter.add_to_buffer(arr_squeezed)
         except Exception as err:
             self.recording=False
-            print(f"[callback]exception")
-            traceback.print_exc()
+            logger.error(f"[callback]exception")
+            logger.exception('')
 
     def _fn_voice_callback(self, start_frame,end_frame, buf, samplerate):
         if self._pause or self.recognizer is None or buf is None:
@@ -183,5 +186,5 @@ class SttEngine:
 
         except Exception as err:
             self.recording=False
-            print(f"[callback]exception")
-            traceback.print_exc()
+            logger.error(f"[callback]exception")
+            logger.exception('')

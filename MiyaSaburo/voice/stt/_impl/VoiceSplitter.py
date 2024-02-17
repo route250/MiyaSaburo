@@ -10,10 +10,13 @@ from .VoskUtil import get_vosk_model, get_vosk_spk_model, sound_float_to_int16
 import vosk
 vosk.SetLogLevel(-1)
 
+import logging
+logger = logging.getLogger('voice')
+
 dbg_level=1
 def dbg_print(lv:int,txt:str):
     if lv<=dbg_level:
-        print( txt )
+        logger.debug( txt )
 
 ee=0.05
 
@@ -236,7 +239,7 @@ class VoiceSplitter:
             if self.pass2_data is not None:
                 self.pass2_data.reset()
             self._pause = b
-            print( f"[VoiceSplitter] success to set pause {b}")
+            #print( f"[VoiceSplitter] success to set pause {b}")
             return True
 
     def add_to_buffer(self, array):
@@ -297,10 +300,10 @@ class VoiceSplitter:
 
     def _th_vosk(self,no):
         try:
-            dbg_print(1,f"[vosk{no}]start")
+            # dbg_print(1,f"[vosk{no}]start")
             vosk = self.create_vosk()
             bugfix_frames = 0
-            while True:
+            while not self._pause:
                 index_start = self.pass1_q.get( block=True, timeout=1.0 )
                 with self.buffer_lock:
                     s = index_start - self.buffer_offset
@@ -334,11 +337,12 @@ class VoiceSplitter:
         except Empty:
             pass
         except:
-            traceback.print_exc()
+            logger.exception('')
         finally:
             with self.thread_lock:
                 self.pass1_threads[no] = None
-            dbg_print(1,f"[vosk{no}]exit")
+            if not self._pause:
+                dbg_print(1,f"[vosk{no}]exit")
 
     def _append_json_log(self,res):
         self._hist_json.append(res)
@@ -353,7 +357,7 @@ class VoiceSplitter:
                         line=json.dumps( j, indent=4, ensure_ascii=False )
                         out.write( line );out.write('\n')
         except:
-            traceback.print_exc()
+            logger.exception('')
         self._hist_json=[]
 
     def _pass2_put(self, data ):
@@ -384,7 +388,7 @@ class VoiceSplitter:
     def _th_pass2(self):
         try:
             margin_frames = int( self.samplerate * 0.4 )
-            dbg_print(1,f"[voskX]start")
+            # dbg_print(1,f"[voskX]start")
             vosk_seg_list:VoskSegList = self.pass2_data
             if vosk_seg_list is None:
                 vosk_seg_list = VoskSegList()
@@ -435,12 +439,13 @@ class VoiceSplitter:
             dbg_print(1,f"[voskX]empty")
             pass
         except:
-            traceback.print_exc()
+            logger.exception('')
         finally:
             with self.thread_lock:
                 self.pass2_thread = None
             self._flush_json_log()
-            dbg_print(1,f"[voskX]exit")
+            if not self._pause:
+                dbg_print(1,f"[voskX]exit")
 
     plist=['start','end']
 

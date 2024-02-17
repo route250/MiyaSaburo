@@ -3,7 +3,11 @@ import sys,os,traceback
 from ..stt import RecognizerGoogle, VoiceSplitter, SttEngine
 from ..tts import TtsEngine
 
+import logging
+logger = logging.getLogger('voice')
+
 class VoiceTalkEngine:
+    EOT:str = TtsEngine.EOT
     """
     音声会話のためのエンジン。マイクから音声認識と、音声合成を行う
     """
@@ -26,20 +30,21 @@ class VoiceTalkEngine:
             self.tts.play_beep1()
         elif stat == VoiceTalkEngine.ST_LISTEN_END:
             self.tts.play_beep2()
+
         if self._callback is not None:
             try:
                 self._callback( stat, listen_text=listen_text, confidence=None, talk_text=talk_text, talk_emotion=talk_emotion, talk_model=talk_model )
             except:
-                traceback.print_exc()
+                logger.exception('')
         else:
             if stat == VoiceTalkEngine.ST_LISTEN:
-                print( f"[VoiceTalkEngine] listen {listen_text} {confidence}" )
+                logger.info( f"[VoiceTalkEngine] listen {listen_text} {confidence}" )
             elif stat == VoiceTalkEngine.ST_LISTEN_END:
-                print( f"[VoiceTalkEngine] listen {listen_text} {confidence} __EOT__" )
+                logger.info( f"[VoiceTalkEngine] listen {listen_text} {confidence} __EOT__" )
             elif stat == VoiceTalkEngine.ST_TALK:
-                print( f"[VoiceTalkEngine] talk {talk_text}" )
+                logger.info( f"[VoiceTalkEngine] talk {talk_text}" )
             elif stat == VoiceTalkEngine.ST_TALK_END:
-                print( f"[VoiceTalkEngine] talk END" )
+                logger.info( f"[VoiceTalkEngine] talk END" )
 
     def start(self):
         self._status = VoiceTalkEngine.ST_LISTEN
@@ -62,17 +67,17 @@ class VoiceTalkEngine:
         copy_confidence = 1.0
         s = -1
         if stat==1:
-            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} START")
+            logger.info( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} START")
             s = VoiceTalkEngine.ST_LISTEN
             copy_texts = self.text_buf = []
             copy_confidence = 1.0
         elif stat==2:
-            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence}")
+            logger.info( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence}")
             s = VoiceTalkEngine.ST_LISTEN
             copy_texts = self.text_buf = [t for t in texts]
             copy_confidence = self.text_confidence = confidence
         elif stat==3:
-            print( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence} EOT")
+            logger.info( f"[STT] {start_sec:.3f} - {end_sec:.3f} {stat} {texts} {confidence} EOT")
             self.text_stat = 3
             s = VoiceTalkEngine.ST_LISTEN_END
             copy_texts = self.text_buf = [t for t in texts]
@@ -82,12 +87,12 @@ class VoiceTalkEngine:
     def _tts_callback(self, text:str, emotion:int, model:str):
         """音声合成からの通知により、再生中は音声認識を止める"""
         if text:
-            print( f"[TTS] {text}")
+            logger.info( f"[TTS] {text}")
             self._status = VoiceTalkEngine.ST_TALK
             self.stt.set_pause( True )
             self._fn_callback( VoiceTalkEngine.ST_TALK, talk_text=text, talk_emotion=emotion, talk_model=model )
         else:
-            print( f"[TTS] stop")
+            logger.info( f"[TTS] stop")
             self._status = VoiceTalkEngine.ST_LISTEN
             self.stt.set_pause( False )
             self._fn_callback( VoiceTalkEngine.ST_TALK_END, talk_text=None )
