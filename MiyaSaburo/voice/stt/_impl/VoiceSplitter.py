@@ -232,7 +232,11 @@ class VoiceSplitter:
         self.pass2_data:VoskSegList = None
         self._pause:bool = False
         # 人の声のフィルタリング（バンドパスフィルタ）
-        self.sos = scipy.signal.butter( 4, [10, 7000], 'bandpass', fs=self.samplerate, output='sos')
+        #self.sos = scipy.signal.butter( 4, [100, 7000], 'bandpass', fs=self.samplerate, output='sos')
+        self.sos = scipy.signal.butter( 4, 150, btype='highpass', fs=self.samplerate, output='sos')
+
+    def preload(self):
+        self.create_vosk()
 
     def set_pause(self,b:bool) ->bool:
         with self.pass2_lock:
@@ -248,7 +252,7 @@ class VoiceSplitter:
         if not isinstance(array, np.ndarray) or array.dtype != np.float32:
             raise TypeError("引数はNumPyのfloat32配列でなければなりません")
         # # 人の声のフィルタリング（バンドパスフィルタ）
-        array2 = scipy.signal.sosfilt(self.sos, array)
+        array2 = scipy.signal.sosfilt(self.sos, array) if self.sos is not None else array
         array2 = array2.astype(np.float32) * 2.0
         # print( f"{max(abs(array))} => {max(abs(array2))}")
         # array2 = array

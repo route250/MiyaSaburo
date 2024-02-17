@@ -55,11 +55,12 @@ class VoiceTalkEngine:
         self.stt.stop_recording()
 
     def get_recognized_text(self):
-        if self.text_stat==3 and len(self.text_buf)>0:
-            text = ' '.join(self.text_buf)
-            confs = self.text_confidence
+        if self.text_stat==3:
             self.text_stat = 0
-            return text, confs
+            if len(self.text_buf)>0:
+                text = ' '.join(self.text_buf)
+                confs = self.text_confidence
+                return text, confs
         return None,None
 
     def _fn_stt_callback(self, start_sec, end_sec, stat, texts, confidence ):

@@ -80,16 +80,36 @@ def main():
     speech:VoiceTalkEngine = VoiceTalkEngine()
 
     speech.start()
+    logger.info("##STARTED##")
 
     talk1_split = [ "、", " ", "　" ]
     talk2_split = [ "。", "!", "！", "?","？", "\n"]
 
-    prompt = """1. 現在日時:{datetime} 季節:{season}
+    prompt = """1. Environment
+現在日時:{datetime} 季節:{season} 
+人間の言葉は音声認識でテキスト化されます。認識精度は悪いので注意。
 2.Role
-あなたは女性型AIです。カジュアルに短いセリフを話して下さい。
-議論や詳細説明など必要な場面では、長文で話します。
-人間に用事や話題や話したいことを尋ねる代わりに、{randomtopic}。
-3.人間の言葉はSTTでテキスト化されて入力されます。認識精度は悪いので、不明な文章が入力されたら聞き直して下さい。"""
+あなたは女性型AIです。
+3.Task
+カジュアルに短いセリフで会話して下さい。
+人間に用事や話題や話したいことを尋ねるのは禁止。その代わりに、{randomtopic}。
+日本語で
+"""
+    prompt = """現在日時:{datetime} 季節:{season} 
+Your role is to act as a female AI. Base your actions and speech on this setting.
+Your task is to engage in casual conversation using short phrases.
+You are not allowed to ask the human user for topics or questions.
+Instead, you will provide content on "{randomtopic}"
+The conversation should be conducted in Japanese."""
+    prompt = """
+役割:
+あなたは感情豊かで理解力が高い女性型AIとして振る舞います。人間らしい感情を示しつつ、対話を進めてください。
+音声認識を通じてテキスト化された人間の言葉を理解しますが、認識精度には限界があるため、誤解を避けるためにも寛容である必要があります。
+現在の日時({datetime})と季節({season})を考慮して、より関連性の高い話題を提案します。
+任務:
+人間に用事や話題や話したいことを尋ねるのは禁止。その代わりに、過去の会話や、自然の変化などから適切な話題を選び、自らの経験や観察したこと、感じたことを共有して、対話を豊かにします。
+カジュアルな口調で短いセリフを使い、親しみやすい雰囲気を作り出してください。長文は禁止。ショートトークな日本語で。
+"""
     messages = []
     while True:
         text, confs = speech.get_recognized_text()
@@ -126,6 +146,8 @@ def main():
                 messages.append( {'role':'assistant','content':buffer})
             except:
                 logger.exception('')
+        else:
+            time.sleep(0.5)
 def test():
     from MiyaSaburo.voice.tts import TtsEngine
     e = TtsEngine()
@@ -136,6 +158,13 @@ def test():
     time.sleep(1)
     e.play_beep3()
     time.sleep(1)
+
+def test2():
+    from MiyaSaburo.voice.stt import SttEngine,get_mic_devices
+    STT:SttEngine = SttEngine()
+    mics = get_mic_devices()
+    for m in mics:
+        print(m)
 
 if __name__ == "__main__":
     main()
