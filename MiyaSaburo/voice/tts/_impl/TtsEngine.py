@@ -36,13 +36,42 @@ def f32_to_wave( audio_f32, *, sample_rate, channels=1 ):
     wave_bytes = wav_io.read()
     return wave_bytes
 
+note_to_freq = {
+    'C': -9, 'C#': -8, 'Db': -8, 'D': -7, 'D#': -6, 'Eb': -6,
+    'E': -5, 'F': -4, 'F#': -3, 'Gb': -3, 'G': -2, 'G#': -1,
+    'Ab': -1, 'A': 0, 'A#': 1, 'Bb': 1, 'B': 2
+}
+
+def note_to_hz(note):
+    if isinstance(note,int|float):
+        return int(note)
+    """音名（例:C4）を周波数（Hz）に変換"""
+    if note in ['R', 'r', '']:  # 休符の場合
+        return 0
+    name, octave = note[:-1], int(note[-1])
+    return 440.0 * (2 ** ((octave - 4) + note_to_freq[name] / 12.0))
+
 # C4(ド) 261.63, D4(レ) 293.66  E4(ミ) 329.63 F4(ファ) 349.23 G4(ソ) 392.00 A4(ラ) 440.00 B4(シ) 493.88 C5(ド) 523.25
-def create_wave(Hz=440, time=0.3, sample_rate=16000):
+def create_tone(Hz=440, time=0.3, sample_rate=16000, fade_in_time=0.05, fade_out_time=0.1):
+    Hz = note_to_hz(Hz)
     data_len = int(sample_rate * time)
     if Hz > 0:
-        sound = (np.sin(2 * np.pi * np.arange(data_len) * Hz / sample_rate)).astype(np.float32)
+        # 正弦波を生成
+        sound = np.sin(2 * np.pi * np.arange(data_len) * Hz / sample_rate).astype(np.float32)
+        # フェードイン処理
+        fade_in_len = int(sample_rate * fade_in_time)
+        fade_in = np.linspace(0, 1, fade_in_len)  # 0から1まで線形に増加
+        sound[:fade_in_len] *= fade_in
+        # フェードアウト処理
+        fade_out_len = int(sample_rate * fade_out_time)
+        fade_out = np.linspace(1, 0, fade_out_len)  # 1から0まで線形に減少
+        sound[-fade_out_len:] *= fade_out
     else:
+        # 無音
         sound = np.zeros(data_len, dtype=np.float32)
+    
+    
+    
     return sound
 
 def create_sound(sequence):
@@ -55,7 +84,7 @@ def create_sound(sequence):
         bytes: 生成された音声データのバイナリ（WAV形式）
     """
     sample_rate = 16000
-    sounds = [create_wave(Hz, time, sample_rate) for Hz, time in sequence]
+    sounds = [create_tone(Hz, time, sample_rate) for Hz, time in sequence]
     combined_sound = np.concatenate(sounds)
     return f32_to_wave(combined_sound, sample_rate=sample_rate)
 
@@ -138,9 +167,9 @@ class TtsEngine:
         self._voicevox_port = os.getenv('VOICEVOX_PORT','50021')
         self._voicevox_list = list(set([os.getenv('VOICEVOX_HOST','127.0.0.1'),'127.0.0.1','192.168.0.104','chickennanban.ddns.net']))
 
-        self.sound1 = create_sound( [(440,0.3)] )
-        self.sound2 = create_sound( [(329,0.3)] )
-        self.sound3 = create_sound( [(329,1.0),(10,0.5),(349,0.5)] )
+        self.sound1 = create_sound( [('C4',0.3),('E4',0.3)] )
+        self.sound2 = create_sound( [('E4',0.3),('C4',0.3)] )
+        self.sound3 = create_sound( [('A3',0.3), ('A3',0.4)] )
 
     def submit_task(self, func ) -> Future:
         if self.submit_call is not None:

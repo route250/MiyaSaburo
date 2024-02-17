@@ -13,11 +13,6 @@ vosk.SetLogLevel(-1)
 import logging
 logger = logging.getLogger('voice')
 
-dbg_level=1
-def dbg_print(lv:int,txt:str):
-    if lv<=dbg_level:
-        logger.debug( txt )
-
 ee=0.05
 
 class VoskWord:
@@ -233,7 +228,8 @@ class VoiceSplitter:
         self._pause:bool = False
         # 人の声のフィルタリング（バンドパスフィルタ）
         #self.sos = scipy.signal.butter( 4, [100, 7000], 'bandpass', fs=self.samplerate, output='sos')
-        self.sos = scipy.signal.butter( 4, 150, btype='highpass', fs=self.samplerate, output='sos')
+        # 自動車の場合、低周波ノイズが多いらしいのでハイパスフィルタ
+        self.sos = scipy.signal.butter( 8, 150, btype='highpass', fs=self.samplerate, output='sos')
 
     def preload(self):
         self.create_vosk()
@@ -346,7 +342,7 @@ class VoiceSplitter:
             with self.thread_lock:
                 self.pass1_threads[no] = None
             if not self._pause:
-                dbg_print(1,f"[vosk{no}]exit")
+                logger.debug(f"[vosk{no}]exit")
 
     def _append_json_log(self,res):
         self._hist_json.append(res)
@@ -410,14 +406,14 @@ class VoiceSplitter:
                 idx = int( index_start / (self.seg_frames*2) )
                 self._append_json_log(res)
                 time_start = round( index_start / self.samplerate, 6 )
-                dbg_print(3, f"[voskX]get idx:{idx} frame:{index_start} time {time_start}")
+                #logger.debug( f"[voskX]get idx:{idx} frame:{index_start} time {time_start}")
                 seglist:list[VoskSegment] = vosk_seg_list.get_segment( time_start )
                 for seg in seglist:
-                    dbg_print(2,f"voice seg {seg.start} {seg.end}")
+                    logger.debug(f"voice seg {seg.start} {seg.end}")
                     seg.sort()
                     seg.test()
                     for vw in seg.wordlist:
-                        dbg_print(2, f"    {vw.start:.3f} - {vw.end:.3f}  {vw.frame_start}-{vw.frame_end} {vw.word}")
+                        logger.debug(f"    {vw.start:.3f} - {vw.end:.3f}  {vw.frame_start}-{vw.frame_end} {vw.word}")
                     with self.buffer_lock:
                         a = (seg.frame_start-margin_frames) - self.buffer_offset
                         b = (seg.frame_end+margin_frames) - self.buffer_offset
@@ -440,7 +436,8 @@ class VoiceSplitter:
                         self._last_call = 1
 
         except Empty:
-            dbg_print(1,f"[voskX]empty")
+            if not self._pause:
+                logger.debug(f"[voskX]empty")
             pass
         except:
             logger.exception('')
@@ -449,7 +446,7 @@ class VoiceSplitter:
                 self.pass2_thread = None
             self._flush_json_log()
             if not self._pause:
-                dbg_print(1,f"[voskX]exit")
+                logger.debug(f"[voskX]exit")
 
     plist=['start','end']
 

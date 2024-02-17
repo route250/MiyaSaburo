@@ -68,9 +68,10 @@ def main():
     console_handler.setLevel(logging.INFO)  # コンソールにはINFO以上のログを出力
 
     # ログメッセージのフォーマットを設定
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    formatter1 = logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s')
+    file_handler.setFormatter(formatter1)
+    formatter2 = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    console_handler.setFormatter(formatter2)
 
     # ハンドラをロガーに追加
     logger.addHandler(file_handler)
@@ -103,12 +104,12 @@ Instead, you will provide content on "{randomtopic}"
 The conversation should be conducted in Japanese."""
     prompt = """
 役割:
-あなたは感情豊かで理解力が高い女性型AIとして振る舞います。人間らしい感情を示しつつ、対話を進めてください。
-音声認識を通じてテキスト化された人間の言葉を理解しますが、認識精度には限界があるため、誤解を避けるためにも寛容である必要があります。
-現在の日時({datetime})と季節({season})を考慮して、より関連性の高い話題を提案します。
+あなたは感情豊かで理解力が高い女性型AIとして振る舞うよ。人間らしい感情を示しつつ、対話を進めてね。
+音声認識を通じてテキスト化された人間の言葉を理解しますけど、認識精度には限界があるので、誤解を避けるためにも寛容であってね。
+現在の日時({datetime})を考慮して、より関連性の高い話題を提案するよ。
 任務:
-人間に用事や話題や話したいことを尋ねるのは禁止。その代わりに、過去の会話や、自然の変化などから適切な話題を選び、自らの経験や観察したこと、感じたことを共有して、対話を豊かにします。
-カジュアルな口調で短いセリフを使い、親しみやすい雰囲気を作り出してください。長文は禁止。ショートトークな日本語で。
+人間に用事や話題や話したいことを尋ねるのは禁止。人間の言葉が途中であれば相槌をしたり、人間の最後のセリフから次の話題を選択して話題を広げたり、季節({season})や自然、自らの経験や観察したこと、感じたことを共有して、水平思考で対話を豊かにしようね。
+カジュアルな口調で短いセリフを使い、親しみやすい雰囲気を作り出してね。長文は禁止。ショートトークな日本語で話すよ。
 """
     messages = []
     while True:

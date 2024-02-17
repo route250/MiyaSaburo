@@ -12,6 +12,15 @@ from urllib.error import URLError, HTTPError
 import logging
 logger = logging.getLogger('voice')
 
+def _mic_priority(x):
+    devid = x['index']
+    name = x['name']
+    if 'default' in name:
+        return 10000 + devid
+    if 'USB' in name:
+        return 20000 + devid
+    return 90000 + devid
+
 def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
     sr:float = float(samplerate) if samplerate else 16000
     channels:int = int(channels) if channels else 1
@@ -19,8 +28,7 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
     # select input devices
     inp_dev_list = [ x for x in sd.query_devices() if x['max_input_channels']>0 ]
     # select avaiable devices
-    usb_mic_dev_list = []
-    other_mic_dev_list = []
+    mic_dev_list = []
     for x in inp_dev_list:
         mid = x['index']
         name = f"[{mid:2d}] {x['name']}"
@@ -32,15 +40,12 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
                     logger.debug(f"NoSignal {name}")
                     continue
             logger.debug(f"Avairable {name}")
-            if "USB" in name or "usb" in name:
-                usb_mic_dev_list.append(x)
-            else:
-                other_mic_dev_list.append(x)
+            mic_dev_list.append(x)
         except sd.PortAudioError:
             logger.debug(f"NoSupport {name}")
         except:
             logger.exception()
-    mic_dev_list = usb_mic_dev_list + other_mic_dev_list
+    mic_dev_list = sorted( mic_dev_list, key=_mic_priority)
     for x in mic_dev_list:
         print(f"[{x['index']:2d}] {x['name']}")
     return mic_dev_list
