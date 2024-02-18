@@ -4,10 +4,11 @@ import sounddevice as sd
 import numpy as np
 import wave
 import datetime
+from urllib.error import URLError, HTTPError
 
 from .VoiceSplitter import VoiceSplitter
 from .Recognizer import RecognizerGoogle
-from urllib.error import URLError, HTTPError
+from ..._impl.voice_utils import audio_to_wave
 
 import logging
 logger = logging.getLogger('voice')
@@ -73,6 +74,12 @@ class SttEngine:
         # 保存用
         self._save_buffer:np.ndarray = None
         self._save_pos:int = 0
+        # 監視用
+        self._last_audio_sec:float = 0
+        self._audio_start_sec:float = 0
+        self._audio_sec:float = 0
+        self._audio_status:sd.CallbackFlags = sd.CallbackFlags()
+        self._last_tick_time:float = 0
 
     def set_pause(self,b:bool) ->bool:
         with self._lock:
@@ -132,6 +139,7 @@ class SttEngine:
             bs = 8000
             bs = int( self.samplerate*0.2 )
             self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self.input_device, channels=self.channels, callback=self._fn_audio_callback )
+            self._audio_start_sec = time.time()
             self.audioinput.start()
 
         except Exception as err:
@@ -163,7 +171,34 @@ class SttEngine:
             self.splitter = None
             self.recognizer=None
 
-    def _fn_audio_callback(self, indata, frames, time, status):
+    def tick_time(self, time_sec:float ):
+        if (time_sec-self._last_tick_time)<10:
+            return
+        self._last_tick_time = time_sec
+        qsize = self.splitter.qsize()
+        overflow = self._audio_status.input_overflow
+        underflow = self._audio_status.input_underflow
+        self._audio_status.input_overflow=False
+        self._audio_status.input_underflow=False
+        current_sec = self._audio_sec
+        last_sec = self._last_audio_sec
+        self._last_audio_sec = current_sec
+        t1=int( current_sec-self._audio_start_sec)
+        t2=int( last_sec-self._audio_start_sec )
+        logger.debug( f"[STT]status frame:{t1}/{t2} qsize:{qsize} overflow:{overflow} underflow:{underflow}")
+        if (time_sec-self._last_tick_time)<30:
+            return
+        if last_sec>0 and current_sec==last_sec:
+            logger.error( f"mic audio stopped??")
+            self.stop_recording()
+            self.stop_recording()
+
+    def _fn_audio_callback(self, indata:np.ndarray, frames:int, time, status:sd.CallbackFlags):
+        self._audio_sec = time.inputBufferAdcTime
+        if status.input_underflow:
+            self._audio_status.input_underflow = True
+        if status.input_overflow:
+            self._audio_status.input_overflow = True
         self._add_save_buffer( indata )
         if self._pause or self.splitter is None:
             return
@@ -263,16 +298,11 @@ class SttEngine:
         # waveファイルに保存する処理
         try:
             audio_data = audio_data[0:len] * 32768
-            audio_bytes=audio_data.astype(np.int16).tobytes()
             dt=datetime.datetime.now()
             wave_filename = dt.strftime('sound_%Y%m%d_%H%M%S.wav')
             wave_path = os.path.join( 'logs', 'wave', wave_filename )
             logger.debug( f'save buffer to {wave_path}')
             os.makedirs( os.path.dirname(wave_path), exist_ok=True )
-            with wave.open(wave_path, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(self.samplerate)
-                wf.writeframes(audio_bytes)
+            audio_to_wave( wave_path, audio_data, samplerate=self.samplerate )
         except:
             logger.exception('can not save wave file')

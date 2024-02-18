@@ -53,6 +53,10 @@ class VoiceTalkEngine:
     def stop(self):
         self._status = VoiceTalkEngine.ST_STOPPED
         self.stt.stop_recording()
+    
+    def tick_time(self, time_sec:float):
+        self.tts.tick_time(time_sec)
+        self.stt.tick_time(time_sec)
 
     def get_recognized_text(self):
         if self.text_stat==3:

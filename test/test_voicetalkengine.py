@@ -149,6 +149,7 @@ The conversation should be conducted in Japanese."""
                 logger.exception('')
         else:
             time.sleep(0.5)
+            speech.tick_time( time.time() )
 def test():
     from MiyaSaburo.voice.tts import TtsEngine
     e = TtsEngine()

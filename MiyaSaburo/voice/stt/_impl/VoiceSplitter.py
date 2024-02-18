@@ -242,6 +242,9 @@ class VoiceSplitter:
             #print( f"[VoiceSplitter] success to set pause {b}")
             return True
 
+    def qsize(self):
+        return self.pass1_q.qsize()
+
     def add_to_buffer(self, array):
         if self._pause:
             return
