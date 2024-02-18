@@ -75,11 +75,12 @@ class SttEngine:
         self._save_buffer:np.ndarray = None
         self._save_pos:int = 0
         # 監視用
-        self._last_audio_sec:float = 0
+        self._last_audio_sec:float = -1
         self._audio_start_sec:float = 0
         self._audio_sec:float = 0
         self._audio_status:sd.CallbackFlags = sd.CallbackFlags()
-        self._last_tick_time:float = 0
+        self._last_tick_time1:float = 0
+        self._last_tick_time3:float = 0
 
     def set_pause(self,b:bool) ->bool:
         with self._lock:
@@ -112,7 +113,7 @@ class SttEngine:
         try:
             self.select_input_device()
             self.recording = True
-            thread = Thread(target=self._th_record)
+            thread = Thread(target=self._th_record,name='audio_start')
             thread.start()
             for x in range(0,60):
                 if not self.recording:
@@ -140,6 +141,8 @@ class SttEngine:
             bs = int( self.samplerate*0.2 )
             self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self.input_device, channels=self.channels, callback=self._fn_audio_callback )
             self._audio_start_sec = time.time()
+            self._audio_sec = 0
+            self._last_audio_sec = -1
             self.audioinput.start()
 
         except Exception as err:
@@ -172,26 +175,30 @@ class SttEngine:
             self.recognizer=None
 
     def tick_time(self, time_sec:float ):
-        if (time_sec-self._last_tick_time)<10:
-            return
-        self._last_tick_time = time_sec
-        qsize = self.splitter.qsize()
-        overflow = self._audio_status.input_overflow
-        underflow = self._audio_status.input_underflow
-        self._audio_status.input_overflow=False
-        self._audio_status.input_underflow=False
-        current_sec = self._audio_sec
-        last_sec = self._last_audio_sec
-        self._last_audio_sec = current_sec
-        t1=int( current_sec-self._audio_start_sec)
-        t2=int( last_sec-self._audio_start_sec )
-        logger.debug( f"[STT]status frame:{t1}/{t2} qsize:{qsize} overflow:{overflow} underflow:{underflow}")
-        if (time_sec-self._last_tick_time)<30:
-            return
-        if last_sec>0 and current_sec==last_sec:
-            logger.error( f"mic audio stopped??")
-            self.stop_recording()
-            self.stop_recording()
+        try:
+            if (time_sec-self._last_tick_time1)<10:
+                return
+            self._last_tick_time1 = time_sec
+            qsize = self.splitter.qsize() if self.splitter is not None else 0
+            overflow = self._audio_status.input_overflow
+            underflow = self._audio_status.input_underflow
+            self._audio_status.input_overflow=False
+            self._audio_status.input_underflow=False
+            current_sec = self._audio_sec
+            last_sec = self._last_audio_sec
+            self._last_audio_sec = current_sec
+            t1=int( current_sec-self._audio_start_sec)
+            t2=int( last_sec-self._audio_start_sec )
+            logger.debug( f"[STT]status frame:{t1}/{t2} qsize:{qsize} overflow:{overflow} underflow:{underflow}")
+            if (time_sec-self._last_tick_time3)<30:
+                return
+            self._last_tick_time3 = time_sec
+            if last_sec>=0 and current_sec==last_sec:
+                logger.error( f"mic audio stopped??")
+                self.stop_recording()
+                self.stop_recording()
+        except:
+            logger.exception('error')
 
     def _fn_audio_callback(self, indata:np.ndarray, frames:int, time, status:sd.CallbackFlags):
         self._audio_sec = time.inputBufferAdcTime
@@ -286,7 +293,7 @@ class SttEngine:
             e = self._save_pos + len(audio_data)
             if self._save_buffer is None or e>bufsize:
                 if self._save_buffer is not None and self._save_pos>0:
-                    t = Thread( target=self._save_th, args=(self._save_buffer,self._save_pos))
+                    t = Thread( target=self._save_th, args=(self._save_buffer,self._save_pos),name='wave_save')
                     t.start()
                 self._save_buffer = np.zeros(bufsize)
                 self._save_pos = 0
