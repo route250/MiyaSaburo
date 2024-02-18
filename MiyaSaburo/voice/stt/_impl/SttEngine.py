@@ -23,6 +23,8 @@ def _mic_priority(x):
     return 90000 + devid
 
 def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
+    """マイクとして使えるデバイスをリストとして返す"""
+    # 条件
     sr:float = float(samplerate) if samplerate else 16000
     channels:int = int(channels) if channels else 1
     dtype = dtype if dtype else np.float32
@@ -34,8 +36,10 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
         mid = x['index']
         name = f"[{mid:2d}] {x['name']}"
         try:
+            # check parameters
             sd.check_input_settings( device=mid, channels=channels, samplerate=sr, dtype=dtype )
-            with sd.InputStream( samplerate=sr, device=mid, channels=channels) as audio_in:
+            # read audio data
+            with sd.InputStream( samplerate=sr, device=mid, channels=channels,) as audio_in:
                 frames,overflow = audio_in.read(1000)
                 if max(abs(frames.squeeze()))<1e-9:
                     logger.debug(f"NoSignal {name}")
@@ -46,19 +50,25 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
             logger.debug(f"NoSupport {name}")
         except:
             logger.exception()
+    # sort
     mic_dev_list = sorted( mic_dev_list, key=_mic_priority)
-    for x in mic_dev_list:
-        print(f"[{x['index']:2d}] {x['name']}")
+    # for x in mic_dev_list:
+    #     print(f"[{x['index']:2d}] {x['name']}")
     return mic_dev_list
 
 # 録音機能のクラス
 class SttEngine:
     E1 = '音声認識の結果が不明瞭'
-    def __init__(self, *, callback=None, samplerate=16000, channels=1):
+    S1:int = 1
+    S2:int = 2
+    S3:int = 3
+    S91:int = 91
+
+    def __init__(self, *, device=None, callback=None, samplerate=16000, channels=1):
         self._callback = callback
-        self.inp_dev_list = get_mic_devices(samplerate=samplerate, channels=channels, dtype=np.float32)
-        self.input_device = None
-        self.input_device_info = None
+        self.input_device = device
+        self._selected_device_id = None
+        self._selected_device_info = None
         self.samplerate:int = samplerate
         self.channels:int = channels
         self.recording:bool = False
@@ -101,11 +111,16 @@ class SttEngine:
     def select_input_device(self):
         try:
             if self.input_device is None:
-                self.input_device = next((x['index'] for x in self.inp_dev_list if "default" in x['name'].lower()), self.inp_dev_list[0]['index'])
-            if self.input_device is not None:
-                self.input_device_info = sd.query_devices( self.input_device, 'input' )
+                # 指定がなければ自動選択
+                inp_dev_list = get_mic_devices(samplerate=self.samplerate, channels=self.channels, dtype=np.float32)
+                self._selected_device_id = inp_dev_list[0]['index'] if inp_dev_list and len(inp_dev_list)>0 else None
             else:
-                self.input_device_info = None
+                # 指定があれば、それを使う
+                self._selected_device_id = self.input_device
+            if self._selected_device_id is not None:
+                self._selected_device_info = sd.query_devices( self._selected_device_id, 'input' )
+            else:
+                self._selected_device_info = None
         except Exception as err:
             logger.exception('')
 
@@ -130,16 +145,14 @@ class SttEngine:
     def _th_record(self):
         try:
             self.select_input_device()
-            if self.input_device_info is None:
+            if self._selected_device_info is None:
                 return
-            self.samplerate=int(self.input_device_info['default_samplerate'])
-            self.samplerate=16000
-            self.channels=1
+            self.samplerate=int(self._selected_device_info['default_samplerate'])
             self.splitter:VoiceSplitter = VoiceSplitter( samplerate=self.samplerate, callback=self._fn_voice_callback )
             self.recognizer = RecognizerGoogle( self.samplerate )
             bs = 8000
             bs = int( self.samplerate*0.2 )
-            self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self.input_device, channels=self.channels, callback=self._fn_audio_callback )
+            self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self._selected_device_id, channels=self.channels, callback=self._fn_audio_callback )
             self._audio_start_sec = time.time()
             self._audio_sec = 0
             self._last_audio_sec = -1
@@ -176,7 +189,7 @@ class SttEngine:
 
     def tick_time(self, time_sec:float ):
         try:
-            if (time_sec-self._last_tick_time1)<10:
+            if not self.recording or (time_sec-self._last_tick_time1)<10:
                 return
             self._last_tick_time1 = time_sec
             qsize = self.splitter.qsize() if self.splitter is not None else 0
@@ -195,8 +208,11 @@ class SttEngine:
             self._last_tick_time3 = time_sec
             if last_sec>=0 and current_sec==last_sec:
                 logger.error( f"mic audio stopped??")
+                if self._callback is not None:
+                    self._callback( current_sec, current_sec, SttEngine.S91, '', 0 )
                 self.stop_recording()
-                self.stop_recording()
+                logger.error( f"try restart")
+                self.start_recording()
         except:
             logger.exception('error')
 
@@ -232,7 +248,7 @@ class SttEngine:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec) START")
                 if not self.text_list:
                     texts=[]
-                    stat=1
+                    stat=SttEngine.S1
             elif len(buf)>1:
                 #print( f"[google] fr[{start_frame}:{end_frame}] {ts:.3f} - {te:.3f} (sec)")
                 timeout=2.0
@@ -243,7 +259,7 @@ class SttEngine:
                     if txt is None or confidence is None:
                         txt = SttEngine.E1
                         confidence = 0.0
-                    stat=2
+                    stat=SttEngine.S2
                 except (URLError,HTTPError) as ex:
                     txt = f'通信エラーにより音声認識に失敗しました {type(ex).__name__}:{str(ex)}'
                     confidence = 0.0
@@ -251,7 +267,7 @@ class SttEngine:
                         stat = -1
                     else:
                         self.networkerror = True
-                        stat=2
+                        stat=SttEngine.S2
                 except Exception as ex:
                     txt = f'例外により音声認識に失敗しました。 {type(ex).__name__}:{ex}'
                     confidence = 0.0
@@ -259,9 +275,9 @@ class SttEngine:
                         stat = -1
                     else:
                         self.networkerror = True
-                        stat=2
+                        stat=SttEngine.S2
                 #print(f"[google] {self.textbuffer}")
-                if stat==2:
+                if stat==SttEngine.S2:
                         self.text_list.append(txt)
                         self.text_confidence = min( self.text_confidence, confidence)
                 texts = self.text_list
@@ -273,7 +289,7 @@ class SttEngine:
                 if all(t == SttEngine.E1 for t in texts):
                     texts = []
                 confs = self.text_confidence
-                stat=3
+                stat=SttEngine.S3
                 self.text_list = []
                 self.text_confidence = 1.0
             if stat>0 and self._callback is not None:
