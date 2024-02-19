@@ -9,11 +9,6 @@ from .VoskUtil import sound_float_to_int16, NetworkError
 import logging
 logger = logging.getLogger('voice')
 
-dbg_level=1
-def dbg_print(lv:int,txt:str):
-    if lv>=dbg_level:
-        print( txt )
-
 class RecognizerGoogle:
 
     def __init__(self, timeout=None, sample_rate:int=16000, width=2, lang='ja_JP'):

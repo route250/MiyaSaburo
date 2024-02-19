@@ -142,19 +142,21 @@ The conversation should be conducted in Japanese."""
                         model=openai_llm_model, max_tokens=256, temperature=0.7,
                         stream=True
                 )
-                buffer = ""
+                talk_buffer = ""
+                assistant_content=""
                 for part in stream:
                     seg = part.choices[0].delta.content or ""
-                    buffer += seg
+                    assistant_content+=seg
+                    talk_buffer += seg
                     if seg in talk2_split:
                         logger.info( f"{seg}")
-                        speech.add_talk(buffer)
-                        buffer = ""
-                if buffer:
-                    speech.add_talk(buffer)
+                        speech.add_talk(talk_buffer)
+                        talk_buffer = ""
+                if talk_buffer:
+                    speech.add_talk(talk_buffer)
                 speech.add_talk(VoiceTalkEngine.EOT)
                 time.sleep(2.0)
-                messages.append( {'role':'assistant','content':buffer})
+                messages.append( {'role':'assistant','content':assistant_content})
             except:
                 logger.exception('')
         else:
