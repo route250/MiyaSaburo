@@ -231,6 +231,28 @@ class VoiceSplitter:
         # 自動車の場合、低周波ノイズが多いらしいのでハイパスフィルタ
         self.sos = scipy.signal.butter( 8, 150, btype='highpass', fs=self.samplerate, output='sos')
 
+    def stop(self):
+        logger.debug('stop start')
+        try:
+            self.set_pause(True)
+        except:
+            logger.exception('stop')
+        try:
+            for t in self.pass1_threads:
+                try:
+                    if t is not None:
+                        t.join(2.0)
+                except:
+                    logger.exception('join')
+            try:
+                if self.pass2_thread is not None:
+                    self.pass2_thread.join(2.0)
+            except:
+                logger.exception('join')
+        except:
+            logger.exception('stop')
+        logger.debug('stop end')
+
     def preload(self):
         self.create_vosk()
 

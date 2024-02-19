@@ -41,6 +41,9 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
             # read audio data
             with sd.InputStream( samplerate=sr, device=mid, channels=channels,) as audio_in:
                 frames,overflow = audio_in.read(1000)
+                audio_in.abort(ignore_errors=True)
+                audio_in.stop(ignore_errors=True)
+                audio_in.close(ignore_errors=True)
                 if max(abs(frames.squeeze()))<1e-9:
                     logger.debug(f"NoSignal {name}")
                     continue
@@ -94,14 +97,14 @@ class SttEngine:
 
     def set_pause(self,b:bool) ->bool:
         with self._lock:
-            try:
-                if self.audioinput is not None:
-                    if b:
-                        self.audioinput.stop()
-                    else:
-                        self.audioinput.start()
-            except:
-                pass
+            # try:
+            #     if self.audioinput is not None:
+            #         if b:
+            #             self.audioinput.stop()
+            #         else:
+            #             self.audioinput.start()
+            # except:
+            #     pass
             if self.splitter is None or self.splitter.set_pause(b):
                 self._pause = b
                 # print( f"[VoiceRecognizer] success to set pause {b}")
@@ -167,7 +170,10 @@ class SttEngine:
         try:
             try:
                 if self.audioinput is not None:
-                    self.audioinput.stop()
+                    self.audioinput.abort(ignore_errors=True)
+                    self.audioinput.stop(ignore_errors=True)
+                    self.audioinput.close(ignore_errors=True)
+                    self.audioinput = None
             except:
                 pass
             try:
@@ -216,8 +222,9 @@ class SttEngine:
         except:
             logger.exception('error')
 
-    def _fn_audio_callback(self, indata:np.ndarray, frames:int, time, status:sd.CallbackFlags):
-        self._audio_sec = time.inputBufferAdcTime
+    def _fn_audio_callback(self, indata:np.ndarray, frames:int, atime, status:sd.CallbackFlags):
+        #print( f"time {atime} {atime.inputBufferAdcTime} {atime.outputBufferDacTime} {atime.currentTime}")
+        self._audio_sec += frames/self.samplerate
         if status.input_underflow:
             self._audio_status.input_underflow = True
         if status.input_overflow:
