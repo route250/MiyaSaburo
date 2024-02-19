@@ -149,6 +149,7 @@ class SttEngine:
         try:
             self.select_input_device()
             if self._selected_device_info is None:
+                logger.error("no mic device ???")
                 return
             self.samplerate=int(self._selected_device_info['default_samplerate'])
             self.splitter:VoiceSplitter = VoiceSplitter( samplerate=self.samplerate, callback=self._fn_voice_callback )
@@ -208,7 +209,7 @@ class SttEngine:
             self._last_audio_sec = current_sec
             t1=int( current_sec-self._audio_start_sec)
             t2=int( last_sec-self._audio_start_sec )
-            logger.debug( f"[STT]status frame:{t1}/{t2} qsize:{qsize} overflow:{overflow} underflow:{underflow}")
+            logger.debug( f"[STT]audio time:{t1}/{t2} qsize:{qsize} overflow:{overflow} underflow:{underflow}")
             if (time_sec-self._last_tick_time3)<30:
                 return
             self._last_tick_time3 = time_sec
@@ -224,7 +225,7 @@ class SttEngine:
 
     def _fn_audio_callback(self, indata:np.ndarray, frames:int, atime, status:sd.CallbackFlags):
         #print( f"time {atime} {atime.inputBufferAdcTime} {atime.outputBufferDacTime} {atime.currentTime}")
-        self._audio_sec += frames/self.samplerate
+        self._audio_sec = atime.inputBufferAdcTime if atime.inputBufferAdcTime>0 else time.time()
         if status.input_underflow:
             self._audio_status.input_underflow = True
         if status.input_overflow:
