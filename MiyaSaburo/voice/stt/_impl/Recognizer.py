@@ -22,6 +22,9 @@ class RecognizerGoogle:
         self.sample_width = width
         self.lang = lang
 
+    def stop(self):
+        pass
+
     def recognizef(self, float_list:list[float], *,timeout=None, retry=None, sample_rate:int=None, lang:str=None  ):
         """音声認識 float配列バージョン"""
         floats = np.array(float_list, dtype=np.float32)
