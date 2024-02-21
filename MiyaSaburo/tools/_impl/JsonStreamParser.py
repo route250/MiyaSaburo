@@ -7,6 +7,7 @@ PRE_VALUE=4
 IN_QSTR=5
 AFTER_VALUE=6
 IN_NUMBER=7
+IN_NULL=8
 FREE_STR=9
 END=999
 
@@ -24,6 +25,10 @@ class JsonStreamParser:
         self._obj=None
         self._key=None
         self._val=None
+        self._esc=0
+        self._ucode=""
+        self._lines=1
+        self._cols=1
 
     def _push(self, new_obj, new_phase ):
         if self._obj is None:
@@ -56,19 +61,51 @@ class JsonStreamParser:
     
     def _put_char( self, cc ):
         try:
+            if self._esc==0 and cc=="\\" and ( self._phase==IN_QSTR or self._phase==IN_KEY):
+                self._esc=1
+                return
+            elif self._esc==1:
+                if "r"==cc:
+                    cc="\r"
+                elif "n"==cc:
+                    cc="\n"
+                elif "t"==cc:
+                    cc="\t"
+                elif "\""==cc:
+                    cc="\"x"
+                elif "\\"==cc:
+                    cc="\\"
+                elif "u"==cc:
+                    self._esc=2
+                    self._ucode="\\u"
+                    return
+                else:
+                    raise JsonStreamParseError(f"invalid escape secence \"\\{cc}",self._pos)
+                self._esc=0
+            elif self._esc>=2:
+                self._ucode+=cc
+                if len(self._ucode)<6:
+                    return
+                self._esc=0
+                try:
+                    cc = self._ucode.encode().decode('unicode-escape')
+                except:
+                    raise JsonStreamParseError(f"invalid escape secence \"{self._ucode}",self._pos)
+                self._ucode=""
+
             if self._phase==PRE_KEY:
                 # pre key
                 if cc=="\"":
                     self._phase=IN_KEY
                     self._key=""
                 elif cc>" ":
-                    raise JsonStreamParseError(f"invalid char in before value \"{cc}\"",self._pos)
+                    raise JsonStreamParseError(f"Expecting property name enclosed in double quotes: line {self._lines} column {self._cols} (char {self._pos})",self._pos)
             elif self._phase==IN_KEY:
                 # in key
                 if cc=="\"":
                     self._phase=AFTER_KEY
                 else:
-                    self._key += cc
+                    self._key += cc[0]
             elif self._phase==AFTER_KEY:
                 # after key
                 if cc==":":
@@ -96,6 +133,13 @@ class JsonStreamParser:
                         self._obj[self._key] = None
                     else:
                         pass
+                elif cc=="n":
+                    self._phase=IN_NULL
+                    self._val=cc
+                    if isinstance(self._obj,dict):
+                        self._obj[self._key] = None
+                    else:
+                        pass
                 elif cc>" ":
                     if self._obj is None and self._key is None and self._val is None:
                         self._phase = FREE_STR
@@ -109,14 +153,14 @@ class JsonStreamParser:
                     self._key=None
                     self._val=None
                 else:
-                    self._val += cc
+                    self._val += cc[0]
                     if isinstance(self._obj,dict):
                         self._obj[self._key] = self._val
                     else:
                         self._obj[-1] = self._val
             elif self._phase==IN_NUMBER:
                 # in number
-                if cc=="." or "0"<=cc and cc<="9":
+                if cc=="." or cc=="+" or cc=="-" or cc=="e" or "0"<=cc and cc<="9":
                     self._val+=cc
                 elif cc<=" " or cc=="," or cc=="}" or cc=="]":
                     num = JsonStreamParser.parse_number(self._val)
@@ -124,6 +168,20 @@ class JsonStreamParser:
                         self._obj[self._key] = num
                     else:
                         self._obj.append(num)
+                    self._phase=AFTER_VALUE
+                    self._key=None
+                    self._val=None
+                    self._put_after_value(cc)
+                else:
+                    raise JsonStreamParseError(f"invalid char in number value \"{cc}\"",self._pos)
+            elif self._phase==IN_NULL:
+                if cc=="u" or cc=="l":
+                    self._val+=cc
+                elif cc<=" " or cc=="," or cc=="}" or cc=="]":
+                    if isinstance(self._obj,dict):
+                        pass
+                    else:
+                        self._obj.append(None)
                     self._phase=AFTER_VALUE
                     self._key=None
                     self._val=None
@@ -146,6 +204,10 @@ class JsonStreamParser:
                 raise JsonStreamParseError(f"invalid phase {self._phase} \"{cc}\"",self._pos)
         finally:
             self._pos+=1
+            self._cols+=1
+            if cc=="\n":
+                self._lines+=1
+                self._cols=1
 
     def _put_after_value(self,cc):
         # after value
