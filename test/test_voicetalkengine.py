@@ -16,6 +16,7 @@ print(f"__name__:{__name__}")
 sys.path.append(os.getcwd())
 # sys.path.append('/home/maeda/LLM/MiyaSaburo/MiyaSaburo')
 from MiyaSaburo.voice import VoiceTalkEngine
+from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
    
 def strftime( value:float, default=None ):
     if isinstance( value, float ) and value>0.0:
@@ -121,6 +122,11 @@ The conversation should be conducted in Japanese."""
 同じ話題が連続してるかな？そんな時は、水平思考で次の新しい話題を考えるよ！。
 長文(100文字以上)は禁止。短いテンポのいいカジュアルな日本語で話すよ。
 """
+    prompt_fmt="""
+出力:
+以下のJSONで出力すること
+{"topic":"この会話の短い表題","talk":"あなたの言葉","memory":"Information needed for subsequent conversations. For example, place, scene, time..."}
+"""
     messages = []
     while True:
         text, confs = speech.get_recognized_text()
@@ -130,7 +136,7 @@ The conversation should be conducted in Japanese."""
             if 0.0<confs and confs<0.6:
                 request_messages.insert( len(request_messages)-2, {'role':'system','content':f'次のメッセージは、音声認識結果のconfidence={confs}'})
             now=strftime( time.time() )
-            pr = prompt
+            pr = prompt + "\n" + prompt_fmt
             pr = pr.replace('{datetime}', now )
             pr = pr.replace('{season}', get_season() )
             pr = pr.replace('{randomtopic}', random_topic() )
@@ -140,21 +146,30 @@ The conversation should be conducted in Japanese."""
                 stream = client.chat.completions.create(
                         messages=request_messages,
                         model=openai_llm_model, max_tokens=256, temperature=0.7,
-                        stream=True
+                        stream=True, response_format={"type":"json_object"}
                 )
                 talk_buffer = ""
                 assistant_content=""
+                result_dict=None
+                before_talk_text = ""
+                parser:JsonStreamParser = JsonStreamParser()
                 for part in stream:
-                    seg = part.choices[0].delta.content or ""
-                    assistant_content+=seg
+                    delta_response = part.choices[0].delta.content or ""
+                    assistant_content+=delta_response
+                    result_dict = parser.put(delta_response)
+                    talk_text= result_dict.get("talk","") if result_dict is not None else ""
+                    seg = talk_text[len(before_talk_text):]
+                    before_talk_text = talk_text
                     talk_buffer += seg
                     if seg in talk2_split:
-                        logger.info( f"{seg}")
+                        logger.info( f"{seg} : {talk_buffer}")
                         speech.add_talk(talk_buffer)
                         talk_buffer = ""
                 if talk_buffer:
                     speech.add_talk(talk_buffer)
                 speech.add_talk(VoiceTalkEngine.EOT)
+                print( "chat response" )
+                print( assistant_content )
                 time.sleep(2.0)
                 messages.append( {'role':'assistant','content':assistant_content})
             except:
