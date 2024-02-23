@@ -22,11 +22,10 @@ def _mic_priority(x):
         return 20000 + devid
     return 90000 + devid
 
-def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
+def get_mic_devices( *, samplerate=None, dtype=None ):
     """マイクとして使えるデバイスをリストとして返す"""
     # 条件
     sr:float = float(samplerate) if samplerate else 16000
-    channels:int = int(channels) if channels else 1
     dtype = dtype if dtype else np.float32
     # select input devices
     inp_dev_list = [ x for x in sd.query_devices() if x['max_input_channels']>0 ]
@@ -37,14 +36,17 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
         name = f"[{mid:2d}] {x['name']}"
         try:
             # check parameters
-            sd.check_input_settings( device=mid, channels=channels, samplerate=sr, dtype=dtype )
+            sd.check_input_settings( device=mid, samplerate=sr, dtype=dtype )
             # read audio data
-            with sd.InputStream( samplerate=sr, device=mid, channels=channels,) as audio_in:
+            # channelsを指定したら内臓マイクで録音できないので指定してはいけない。
+            with sd.InputStream( samplerate=sr, device=mid ) as audio_in:
                 frames,overflow = audio_in.read(1000)
                 audio_in.abort(ignore_errors=True)
                 audio_in.stop(ignore_errors=True)
                 audio_in.close(ignore_errors=True)
-                if max(abs(frames.squeeze()))<1e-9:
+                if len(frames.shape)>1:
+                    frames = frames[:,0]
+                if max(abs(frames))<1e-9:
                     logger.debug(f"NoSignal {name}")
                     continue
             logger.debug(f"Avairable {name}")
@@ -52,7 +54,7 @@ def get_mic_devices( *, samplerate=None, channels=None, dtype=None ):
         except sd.PortAudioError:
             logger.debug(f"NoSupport {name}")
         except:
-            logger.exception()
+            logger.exception('mic')
     # sort
     mic_dev_list = sorted( mic_dev_list, key=_mic_priority)
     # for x in mic_dev_list:
@@ -67,13 +69,12 @@ class SttEngine:
     S3:int = 3
     S91:int = 91
 
-    def __init__(self, *, device=None, callback=None, samplerate=16000, channels=1):
+    def __init__(self, *, device=None, callback=None, samplerate=16000):
         self._callback = callback
         self.input_device = device
         self._selected_device_id = None
         self._selected_device_info = None
         self.samplerate:int = samplerate
-        self.channels:int = channels
         self.recording:bool = False
 
         self.audioinput:sd.InputStream = None
@@ -115,7 +116,7 @@ class SttEngine:
         try:
             if self.input_device is None:
                 # 指定がなければ自動選択
-                inp_dev_list = get_mic_devices(samplerate=self.samplerate, channels=self.channels, dtype=np.float32)
+                inp_dev_list = get_mic_devices(samplerate=self.samplerate, dtype=np.float32)
                 self._selected_device_id = inp_dev_list[0]['index'] if inp_dev_list and len(inp_dev_list)>0 else None
             else:
                 # 指定があれば、それを使う
@@ -156,7 +157,8 @@ class SttEngine:
             self.recognizer = RecognizerGoogle( self.samplerate )
             bs = 8000
             bs = int( self.samplerate*0.2 )
-            self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self._selected_device_id, channels=self.channels, callback=self._fn_audio_callback )
+            # channelsを指定したら内臓マイクで録音できないので指定してはいけない。
+            self.audioinput = sd.InputStream( samplerate=self.samplerate, blocksize=bs, device=self._selected_device_id, callback=self._fn_audio_callback )
             self._audio_start_sec = time.time()
             self._audio_sec = 0
             self._last_audio_sec = -1
@@ -223,8 +225,15 @@ class SttEngine:
         except:
             logger.exception('error')
 
-    def _fn_audio_callback(self, indata:np.ndarray, frames:int, atime, status:sd.CallbackFlags):
+    # channelsを指定したら内臓マイクで録音できないので指定してはいけない。
+    # なので、callbackの時にステレオであればモノラルにする
+    # あと、渡されたバッファはコピーして使わないといけない
+    def _fn_audio_callback(self, raw_indata:np.ndarray, frames:int, atime, status:sd.CallbackFlags):
         #print( f"time {atime} {atime.inputBufferAdcTime} {atime.outputBufferDacTime} {atime.currentTime}")
+        if len(raw_indata.shape)==1:
+            indata = raw_indata.copy()
+        else:
+            indata = raw_indata[:,0].copy()
         self._audio_sec = atime.inputBufferAdcTime if atime.inputBufferAdcTime>0 else time.time()
         if status.input_underflow:
             self._audio_status.input_underflow = True

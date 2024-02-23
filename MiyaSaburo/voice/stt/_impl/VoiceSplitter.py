@@ -211,6 +211,7 @@ class VoiceSplitter:
         self.buffer = np.array([], dtype=np.float32)
         self.detect_idx = 0
         # VOSKモデル
+        self.model_lock:RLock = RLock()
         self.model_lang = None
         self.model_spk = None
         self.vosk_samplerate:int = self.samplerate
@@ -270,8 +271,8 @@ class VoiceSplitter:
     def add_to_buffer(self, array):
         if self._pause:
             return
-        if not isinstance(array, np.ndarray) or array.dtype != np.float32:
-            raise TypeError("引数はNumPyのfloat32配列でなければなりません")
+        if not isinstance(array, np.ndarray) or array.dtype != np.float32 or len(array.shape)!=1:
+            raise TypeError("引数はNumPyのfloat32の1次元配列でなければなりません")
         # # 人の声のフィルタリング（バンドパスフィルタ）
         array2 = scipy.signal.sosfilt(self.sos, array) if self.sos is not None else array
         array2 = array2.astype(np.float32) * 2.0
@@ -291,17 +292,18 @@ class VoiceSplitter:
                     t.start()
 
     def create_vosk(self) ->KaldiRecognizer :
-        if self.model_lang is None:
-            self.model_lang = get_vosk_model(lang="ja")
-        if self.model_spk is None:
-            self.model_spk = get_vosk_spk_model(self.model_lang)
+        with self.model_lock:
+            if self.model_lang is None:
+                self.model_lang = get_vosk_model(lang="ja")
+            if self.model_spk is None:
+                self.model_spk = get_vosk_spk_model(self.model_lang)
 
-        vosk: KaldiRecognizer = KaldiRecognizer(self.model_lang, int(self.vosk_samplerate) )
-        if self.model_spk is not None:
-            vosk.SetSpkModel( self.model_spk )
-        vosk.SetWords(True)
-        vosk.SetPartialWords(True)
-        return vosk
+            vosk: KaldiRecognizer = KaldiRecognizer(self.model_lang, int(self.vosk_samplerate) )
+            if self.model_spk is not None:
+                vosk.SetSpkModel( self.model_spk )
+            vosk.SetWords(True)
+            vosk.SetPartialWords(True)
+            return vosk
 
     def _vosk_words_bugfix(self, obj, offset_frame=0, bugfix_frames=0 ) :
         """voskのバグを補正する

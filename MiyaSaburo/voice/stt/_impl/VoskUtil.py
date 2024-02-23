@@ -4,6 +4,9 @@ import vosk
 from vosk import Model, KaldiRecognizer, SpkModel
 import numpy as np
 
+import logging
+logger = logging.getLogger('voice')
+
 class NetworkError(Exception):
     def __init__(self, *args):
         super().__init__(*args)
@@ -42,22 +45,40 @@ def sound_float_to_int16( audio_data, *, scale:float=0.8, lowcut:float=0 ):
         return np.zeros( len(audio_data), dtype=np.int16 )
 
 def get_vosk_model( lang:str='ja' ) ->Model:
-    for directory in vosk.MODEL_DIRS:
-        if directory is None or not Path(directory).exists():
-            continue
-        model_file_list = os.listdir(directory)
-        model_file = [model for model in model_file_list if re.match(rf"vosk-model-{lang}", model)]
-        if model_file != []:
-            return Model(str(Path(directory, model_file[0])))
-    for directory in vosk.MODEL_DIRS:
-        if directory is None or not Path(directory).exists():
-            continue
-        model_file_list = os.listdir(directory)
-        model_file = [model for model in model_file_list if re.match(rf"vosk-model-small-{lang}", model)]
-        if model_file != []:
-            return Model(str(Path(directory, model_file[0])))
-    m:Model = Model(lang=lang)
-    return m
+    # search and load model
+    for pattern in [ rf"vosk-model-{lang}",rf"vosk-model-small-{lang}"]:
+        for directory in vosk.MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            model_file_list = [ f for f in os.listdir(directory) if os.path.isdir(f) ]
+            model_file = [model for model in model_file_list if re.match(pattern, model)]
+            if len(model_file) == 0:
+                continue
+            try:
+                return Model(str(Path(directory, model_file[0])))
+            except:
+                logger.exception(f"can not load vosk model {model_file[0]}")
+
+    # cleanup zip file when download error?
+    try:
+        for directory in vosk.MODEL_DIRS:
+            if directory is None or not Path(directory).exists():
+                continue
+            for f in os.listdir(directory):
+                ff = os.path.join(directory,f)
+                if os.path.isfile(ff) and re.match(r"vosk-model(-small)?-{}.*\.zip".format(lang), f):
+                    logger.error(f"remove vosk model {ff}")
+                    os.unlink(ff)
+    except Exception as ex:
+        logger.exception('cleanup??')
+
+    # download model
+    try:
+        m:Model = Model(lang=lang)
+        return m
+    except Exception as ex:
+        logger.exception(f"ERROR:can not load vosk model {ex}")
+    return None
 
 def get_vosk_spk_model(m:Model=None):
     for directory in vosk.MODEL_DIRS:
