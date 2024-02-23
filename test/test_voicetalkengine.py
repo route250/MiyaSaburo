@@ -120,12 +120,19 @@ The conversation should be conducted in Japanese."""
 任務:
 人間に用事や話題や話したいことを尋ねるのは禁止。「話したいことはありますか？」ではなくて、会話履歴から次の話題を考えたり、履歴がなければ時間や季節({season})を考慮して話題をすすめてね。
 同じ話題が連続してるかな？そんな時は、水平思考で次の新しい話題を考えるよ！。
-長文(100文字以上)は禁止。短いテンポのいいカジュアルな日本語で話すよ。
+長文(100文字以上)は禁止。短いテンポで話すよ。in casual taok by japanese.
 """
     prompt_fmt="""
 出力:
 以下のJSONで出力すること
-{"topic":"この会話の短い表題","talk":"あなたの言葉","memory":"Information needed for subsequent conversations. For example, place, scene, time..."}
+{
+"topic":"この会話の短い表題",
+"summary":"highlighting the main topics and any conclusions reached.",
+"keypoint":"A list of key points or important information that we've covered.",
+"current state":"current conversational state in short words. 「相互理解」「調整中」「確認中」など",
+"thought":"next expected conversational state and events needed to achieve that state transition and your thought.",
+"talk":"speech to user"
+}
 """
     messages = []
     while True:
@@ -136,7 +143,7 @@ The conversation should be conducted in Japanese."""
             if 0.0<confs and confs<0.6:
                 request_messages.insert( len(request_messages)-2, {'role':'system','content':f'次のメッセージは、音声認識結果のconfidence={confs}'})
             now=strftime( time.time() )
-            pr = prompt + "\n" + prompt_fmt
+            pr = prompt_fmt + "\n" + prompt
             pr = pr.replace('{datetime}', now )
             pr = pr.replace('{season}', get_season() )
             pr = pr.replace('{randomtopic}', random_topic() )
@@ -145,7 +152,7 @@ The conversation should be conducted in Japanese."""
                 client:OpenAI = OpenAI()
                 stream = client.chat.completions.create(
                         messages=request_messages,
-                        model=openai_llm_model, max_tokens=256, temperature=0.7,
+                        model=openai_llm_model, max_tokens=1000, temperature=0.7,
                         stream=True, response_format={"type":"json_object"}
                 )
                 talk_buffer = ""
