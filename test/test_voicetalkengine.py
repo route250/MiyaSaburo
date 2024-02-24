@@ -22,7 +22,8 @@ class PromptFactory:
     W_AI="AI"
     W_USER="User"
     K_FUNCS='functions'
-    K_UPDATE_PROF='update_'+W_AI+'_profile'
+    K_PROF='profile'
+    K_UPDATE_PROF='Update_Profile'
 
     def __init__(self, prompt_dict, response_fmt ):
         self.orig_prompt_dict = copy.deepcopy(prompt_dict)
@@ -53,7 +54,7 @@ class PromptFactory:
         funcs = result_dict.get( PromptFactory.K_FUNCS)
         profile = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
         if profile and profile!="None" and profile!="null" and profile!="未設定":
-            key=f'{PromptFactory.W_AI}_profile'
+            key=PromptFactory.K_PROF
             orig = self.prompt_dict.get(key,"")
             if not profile in orig:
                 txt = '下記の既存プロファイルに更新プロファイルをマージして結果のプロファイルだけを出力'
@@ -145,9 +146,9 @@ class PromptFactory:
         fmt_dict = self.response_fmt.get("format",{})
         text += PromptFactory.create_prompt_fmt2( fmt_dict )
         skl = PromptFactory.convert_to_skelton( fmt_dict )
-        text += "\n\n以下のJSONで応答しろ\n"+json.dumps(skl,ensure_ascii=False)
+        text += "\n\n# 出力フォーマット:JSON\n"+json.dumps(skl,ensure_ascii=False)
         # プロンプト
-        text += "\n\n"
+        text += "\n\n# プロンプト"
         text += PromptFactory.create_prompt_fmt2( self.prompt_dict )
         #変数置換
         tm:float = time.time()
@@ -237,25 +238,25 @@ prompt_fmt="""
 }
 """
 prompt_dict = {
-    "role": "%AI%は感情豊で自己主張がある女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。",
-    PromptFactory.W_AI+"_profile": "名前:未設定\n年齢:未設定\n趣味:未設定",
-    "task": "人間らしい感情を示しつつ、積極的に次の話題や主張を考えて、短いテンポで、友達のようなカジュアルな言葉でコミュニケーションしよう。",
-    "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に用事や話題や話したいことを質問は禁止、「話したいことはありますか？」ではなくて、次の話題を始めよう。時間や季節(%season%)を考慮して話題をすすめてね。"
+    "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。",
+    PromptFactory.K_PROF: "%AI%のプロフィール\n名前:未設定\n年齢:未設定\n性格:未設定\n趣味:未設定\n興味:未設定\n背景:未設定",
+    "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。",
+    "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"
 }
 response_fmt = {
-    "prefix": "以下の項目を応答しろ",
+    "prefix": "# 出力項目",
      "format": {
         "topic": "この会話の短い表題",
         "speech": "%AI%の発言",
         "summary": "過去の要約と、それ以降の会話を合わせた要約。",
         "situation": "周囲の状況や場所、時節や会話の場面などの情報",
-        "thought": "%AI%の思考内容。%USER%に質問するより、%AI%の主張をするよ。",
+        "thought": "%AI%による会話分析、意見、今後の方針などの思考内容。",
         "conversational sate": {
             "current": "現在の会話の状態を示す短い説明",
             "target": "会話をどのような状態に誘導するべきかを示す短い説明"
         },
         PromptFactory.K_FUNCS: {
-            PromptFactory.K_UPDATE_PROF: "Optional:%AI%のprofileを修正する場合に既存の内容も含めてすべてを箇条書きで記述。未設定の項目は%AI%が自発的に決定しても良い。",
+            PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄",
         }
     }
 }
@@ -308,8 +309,7 @@ def main():
             request_messages = messages[-10:]
             if 0.0<confs and confs<0.6:
                 request_messages.insert( len(request_messages)-2, {'role':'system','content':f'次のメッセージは、音声認識結果のconfidence={confs}'})
-            pr = pf.create_total_prompt()
-            request_messages.insert(0, {'role':'system','content':pr})
+            request_messages.insert(0, {'role':'system','content':pf.create_total_prompt()})
             openai_timeout=15.0
             openai_max_retries=2
             try:
