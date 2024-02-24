@@ -52,7 +52,7 @@ class PromptFactory:
     def update_profile(self, result_dict:str ):
         funcs = result_dict.get( PromptFactory.K_FUNCS)
         profile = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
-        if profile and profile!="None" and profile!="null":
+        if profile and profile!="None" and profile!="null" and profile!="未設定":
             key=f'{PromptFactory.W_AI}_profile'
             orig = self.prompt_dict.get(key,"")
             if not profile in orig:
@@ -348,6 +348,8 @@ def main():
                 pf.update_profile( result_dict )
                 time.sleep(2.0)
                 messages.append( {'role':'assistant','content':assistant_content})
+            except openai.APIConnectionError as ex:
+                logger.error("Cannot connect to openai: {ex}")
             except:
                 logger.exception('')
         else:

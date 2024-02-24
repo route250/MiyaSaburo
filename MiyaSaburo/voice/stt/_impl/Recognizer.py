@@ -83,7 +83,7 @@ class RecognizerGoogle:
                 logger.debug(f"[RECG] {confidence} {final_text}")
                 return final_text, confidence
 
-        except (HTTPError,URLError) as ex:
+        except (HTTPError,URLError,TimeoutError) as ex:
             raise ex
         except Exception as ex:
             logger.exception('')
@@ -128,7 +128,7 @@ class RecognizerGoogle:
         assert isinstance(language, str), "``language`` must be a string"
 
         if not isinstance(operation_timeout,float) or operation_timeout<1.0:
-            operation_timeout = 5
+            operation_timeout = 15
 
         flac_data = audio_data.get_flac_data(
             convert_rate=None if audio_data.sample_rate >= 8000 else 8000,  # audio samples must be at least 8 kHz

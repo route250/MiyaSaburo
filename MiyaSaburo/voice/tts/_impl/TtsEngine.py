@@ -251,24 +251,28 @@ class TtsEngine:
         lang = lang[:2]
         try:
             self._disable_gtts = 0
-            tts = gTTS(text=TtsEngine.__penpenpen(text,'!!'), lang=lang,lang_check=False )
-            with BytesIO() as buffer:
-                tts.write_to_fp(buffer)
-                buffer.seek(0)
-                # gTTSはmp3で返ってくるので変換
-                y, sr = librosa.load(buffer, sr=None)
-                # 話速を2倍にする（時間伸縮）
-                y_fast = librosa.effects.time_stretch(y, rate=1.5)
-                # ピッチを下げる（ここでは半音下げる例）
-                n_steps = -1  # ピッチを半音下げる
-                y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
-                # 音声データをノーマライズする
-                rate = 1.0 / np.max(np.abs(y_shifted))
-                y_normalized = y_shifted * rate
-                wave:bytes = audio_to_wave_bytes(y_normalized, sample_rate=sr )
-                #wave:bytes = buffer.getvalue()
-                del tts
-                return wave,f"gTTS[{lang}]"
+            tts:gTTS = gTTS(text=TtsEngine.__penpenpen(text,'!!'), lang=lang,lang_check=False )
+            with BytesIO() as data_mp3:
+                tts.write_to_fp(data_mp3)
+                try:
+                    # gTTSはmp3で返ってくるので変換
+                    data_mp3.seek(0)
+                    y, sr = librosa.load(data_mp3, sr=None)
+                    # 話速を2倍にする（時間伸縮）
+                    y_fast = librosa.effects.time_stretch(y, rate=1.5)
+                    # ピッチを下げる（ここでは半音下げる例）
+                    n_steps = -1  # ピッチを半音下げる
+                    y_shifted = librosa.effects.pitch_shift(y_fast, sr=sr, n_steps=n_steps)
+                    # 音声データをノーマライズする
+                    rate = 1.0 / np.max(np.abs(y_shifted))
+                    y_normalized = y_shifted * rate
+                    data:bytes = audio_to_wave_bytes(y_normalized, sample_rate=sr )
+                except:
+                    logger.exception('convert gtts mp3 to wave')
+                    data_mp3.seek(0)
+                    data:bytes = data_mp3.getvalue()
+            del tts
+            return data,f"gTTS[{lang}]"
         except AssertionError as ex:
             if "No text to send" in str(ex):
                 return None,f"gTTS[{lang}]"
