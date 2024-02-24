@@ -50,10 +50,10 @@ class RecognizerGoogle:
             for trycount in range(0, retry+1):
                 try:
                     actual_result = RecognizerGoogle.recognize_google(audio_data, language=lang, operation_timeout=timeout )
-                except HTTPError as ex:
+                except (HTTPError,TimeoutError) as ex:
                     if trycount==retry:
                         raise ex
-                    logger.debug(f"[RECG] try{trycount} error response {ex.reason}")
+                    logger.debug(f"[RECG] try{trycount} error response {ex}")
                     continue
                 except URLError as ex:
                     logger.debug(f"[RECG] try{trycount} error response {ex}")
@@ -141,16 +141,14 @@ class RecognizerGoogle:
             "key": key,
             "pFilter": pfilter
         }))
-        request = Request(url, data=flac_data, headers={"Content-Type": "audio/x-flac; rate={}".format(audio_data.sample_rate)})
-
-        # obtain audio transcription results
         try:
-            response = urlopen(request, timeout=operation_timeout)
-        except HTTPError as e:
-            raise e
-        except URLError as e:
-            raise e
-        response_text = response.read().decode("utf-8")
+            request = Request(url, data=flac_data, headers={"Content-Type": "audio/x-flac; rate={}".format(audio_data.sample_rate)})
+            with urlopen(request, timeout=operation_timeout) as response:
+                response_text = response.read().decode("utf-8")
+        except (HTTPError,TimeoutError,URLError) as ex:
+            logger.error( f"google recognize exception: {ex}")
+            raise ex
+
         logger.debug( f"google recognize response: {response.status} {response_text}")
 
         # ignore any blank blocks

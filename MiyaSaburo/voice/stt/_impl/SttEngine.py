@@ -277,7 +277,7 @@ class SttEngine:
                         txt = SttEngine.E1
                         confidence = 0.0
                     stat=SttEngine.S2
-                except (URLError,HTTPError) as ex:
+                except (URLError,HTTPError,TimeoutError) as ex:
                     txt = f'通信エラーにより音声認識に失敗しました {type(ex).__name__}:{str(ex)}'
                     confidence = 0.0
                     if self.networkerror:

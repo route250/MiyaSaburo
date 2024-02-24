@@ -329,6 +329,9 @@ class VoiceSplitter:
         try:
             # dbg_print(1,f"[vosk{no}]start")
             vosk = self.create_vosk()
+            if vosk is None:
+                logger.error("can not load vosk model")
+                return
             bugfix_frames = 0
             while not self._pause:
                 index_start = self.pass1_q.get( block=True, timeout=1.0 )
@@ -350,6 +353,7 @@ class VoiceSplitter:
                 wave_mono_int16 = sound_float_to_int16( buf, scale=0.8, lowcut=0.0 )
                 b = wave_mono_int16.tobytes()
                 vosk.AcceptWaveform( b )
+                #res = json.loads(vosk.FinalResult())
                 res = json.loads(vosk.FinalResult())
                 self._vosk_words_bugfix(res,index_start,bugfix_frames)
                 res['index'] = index_start

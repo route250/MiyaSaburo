@@ -56,6 +56,10 @@ def test():
     test_list.append( "{ \"key\":{\"key\":0}}")
     test_list.append( "{ \"key\": {\"key\":0}}")
     test_list.append( "{ \"key\":{\"key\":0} }")
+    test_list.append( "{ \"key\":{} }")
+    test_list.append( "{ \"key\":{ } }")
+    test_list.append( "{}")
+
     for txt in values:
         test_list.append("{ \"key\": "+txt+" }")
         test_list.append( "[ "+txt+" ]")
@@ -66,6 +70,7 @@ def test():
     test_list.append( "[0, 1]" )
     test_list.append( "[0,1 ]" )
     test_list.append( "[0,1] " )
+    test_list.append( "[] " )
     for tst in test_list:
         obj1 = test_parser( tst )
         res1 = json.dumps( obj1, ensure_ascii=False )

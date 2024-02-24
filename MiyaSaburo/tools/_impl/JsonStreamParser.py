@@ -98,6 +98,8 @@ class JsonStreamParser:
                 if cc=="\"":
                     self._phase=IN_KEY
                     self._key=""
+                elif cc=="}":
+                    self._put_after_value(cc)
                 elif cc>" ":
                     raise JsonStreamParseError(f"Expecting property name enclosed in double quotes: line {self._lines} column {self._cols} (char {self._pos})",self._pos)
             elif self._phase==IN_KEY:
@@ -117,8 +119,12 @@ class JsonStreamParser:
                 # pre value
                 if cc=="{":
                     self._push( {}, PRE_KEY)
+                elif cc=="}" and isinstance(self._obj,dict):
+                    self._put_after_value(cc)
                 elif cc=="[":
                     self._push( [], PRE_VALUE )
+                elif cc=="]" and isinstance(self._obj,list):
+                    self._put_after_value(cc)
                 elif cc=="\"":
                     self._phase=IN_QSTR
                     self._val=""
