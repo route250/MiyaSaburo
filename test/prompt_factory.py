@@ -1,0 +1,516 @@
+
+import sys,os,traceback,time,datetime,json,re,copy,json
+from pathlib import Path
+from dotenv import load_dotenv
+from threading import Thread, Condition
+import random
+import logging
+from openai import OpenAI
+from openai.types.chat import (ChatCompletion,ChatCompletionChunk)
+
+import logging
+logger = logging.getLogger('voice')
+print(f"cwd:{os.getcwd()}")
+print(f"__name__:{__name__}")
+sys.path.append(os.getcwd())
+from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
+
+class PromptFactory:
+    W_AI="AI"
+    W_USER="User"
+    K_TALK="shortTalk"
+    K_FUNCS='functions'
+    K_PROF='profile'
+    K_UPDATE_PROF='Update_Profile'
+
+    def __init__(self, prompt_dict, response_fmt ):
+        self.orig_prompt_dict = copy.deepcopy(prompt_dict)
+        self.orig_response_fmt = copy.deepcopy(response_fmt)
+        self.prompt_dict=copy.deepcopy(prompt_dict)
+        self.response_fmt = copy.deepcopy(response_fmt)
+
+    def _LLM(self,request_text:str,json_obj=False,gpt4=False) ->str:
+        openai_llm_model = "gpt-3.5-turbo" if not gpt4 else "gpt-4-1106-preview"
+        openai_timeout=5.0
+        openai_max_retries=2
+        client:OpenAI = OpenAI(timeout=openai_timeout,max_retries=openai_max_retries)
+        request_messages = [
+            { 'role':'user', 'content': request_text }
+        ]
+        response_format={"type":"json_object"} if json_obj else None
+        try:
+            response:ChatCompletion = client.chat.completions.create(
+                messages=request_messages,
+                model=openai_llm_model, max_tokens=1000, temperature=0.7,
+                response_format = response_format,
+            )
+            response_text = response.choices[0].message.content
+            return response_text
+        except:
+            logger.exception('update profile')
+        return None
+
+    def feedback(self, text:str ):
+        current_dict = {}
+        key_list = [ 'role', 'task']
+        for k in key_list:
+            v = PromptFactory.get_prompt_item( self.prompt_dict, k )
+            if isinstance(v,str):
+                current_dict[k]=v
+        p = PromptFactory.get_prompt_item( self.prompt_dict, PromptFactory.K_PROF )
+        for k,v in PromptFactory.enum_prompt_item( p ):
+            current_dict[k]=v
+
+        txt = "# 以下はLLMへのプロンプトです。\n"
+        txt += json.dumps( current_dict, ensure_ascii=False )
+        txt += "\n"
+        txt += "# 修正リクエスト\n"
+        txt += text
+        txt += '\n'
+        txt += "# 修正した結果を同じJSONフォーマットで出力"
+        print(txt)
+        xxx = self._LLM( txt, json_obj=True)
+        print(xxx)
+        update_dict = json.loads(xxx)
+        for k in key_list:
+            v = update_dict.get(k)
+            if v:
+                PromptFactory.set_prompt_item(self.prompt_dict,k,v)
+
+    def update_profile(self, result_dict:str ):
+        funcs = result_dict.get( PromptFactory.K_FUNCS)
+        request_text = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
+        if request_text and request_text!="None" and request_text!="null" and request_text!="未設定":
+            key=PromptFactory.K_PROF
+            key_list = [ 'role', 'task']
+            current_dict = {}
+            for k in key_list:
+                v = PromptFactory.get_prompt_item( self.prompt_dict, k )
+                if isinstance(v,str):
+                    current_dict[k]=v
+            profile_dict:list = PromptFactory.get_prompt_item( self.prompt_dict, key )
+            for k,v in PromptFactory.enum_prompt_item( profile_dict ):
+                current_dict[k]=v
+            if current_dict:
+                orig_txt = json.dumps(current_dict,ensure_ascii=False)
+            else:
+                orig_txt = '未設定'
+
+            txt = '下記の既存プロファイルに更新リクエストをマージして結果を出力'
+            txt += '\n\n# 既存\n' + orig_txt
+            txt += '\n\n# 更新リクエスト\n' + request_text
+            txt += "\n\n# 以下のJSONフォーマットで出力\n{ \"項目\": \"内容\", \"項目\": \"内容\", ... }"
+            update = self._LLM(txt,json_obj=True)
+            print(f"UpdateProfile\n{orig_txt}\n---\n{update}\n---")
+            if not update:
+                return
+            try:
+                update_dic:dict = json.loads(update)
+            except:
+                logger.exception('invalid json response from llm ')
+                return
+            for k in key_list:
+                if k in update_dic:
+                    v = update_dic[k]
+                    del update_dic[k]
+                    if v:
+                        PromptFactory.set_prompt_item(self.prompt_dict,k,v)
+            upd_fmt = profile_dict if isinstance(profile_dict,list) else []
+            for k,v in update_dic.items():
+                PromptFactory.set_prompt_item( upd_fmt, k, v )
+            if not isinstance(profile_dict,list):
+                PromptFactory.set_prompt_item( self.prompt_dict, key, upd_fmt )
+
+    time_of_day_tbl = [
+        # 0時から3時
+        '深夜','深夜','深夜','深夜',
+        # 4時から6時
+        '早朝','早朝','早朝',
+        # 7時から9時
+        '朝','朝','朝',
+        # 10時から11時
+        '午前','午前',
+        # 12時から13時
+        '昼','昼',
+        # 14時から16時
+        '午後','午後','午後',
+        # 17時から18時
+        '夕方','夕方',
+        # 19時から22時
+        '夜','夜','夜','夜',
+        # 23時
+        '深夜',
+    ]
+
+    @staticmethod
+    def get_season( dt ):
+        # タイムスタンプを datetime オブジェクトに変換
+        if isinstance(dt,datetime.datetime):
+            dt_object = dt
+        elif isinstance(dt,float):
+            dt_object = datetime.datetime.fromtimestamp(dt)
+        else:
+            dt_object = datetime.datetime.fromtimestamp(time.time())
+        day = dt_object.month*100+dt_object.day
+        if day <=103:
+            return '正月'
+        if day < 315:
+            return '冬'
+        if day < 431:
+            return '春'
+        if day < 531:
+            return '初夏'
+        if day < 631:
+            return '梅雨'
+        if day < 931:
+            return '夏'
+        if day < 1031:
+            return '秋'
+        if day < 1231:
+            return '冬'
+        return ''
+
+    @staticmethod
+    def strftime( value:float, default="" ):
+        if isinstance( value, float ) and value>0.0:
+            """unixtimeをフォーマットする"""
+            dt=datetime.datetime.fromtimestamp(value)
+            season=PromptFactory.get_season(dt)
+            tod = PromptFactory.time_of_day_tbl[dt.hour]
+            text = dt.strftime('%Y年%m月%d '+season+' '+tod+'%H時%M分')
+            # 正規表現で不要な"0"を削除 ただし、"0時"はそのまま残す
+            text = re.sub(r'(?<!\d)0', '', text)  # 先頭の0を削除、ただし数字の後ろの0は残す
+            return text
+
+        return default
+
+    topics_tbl=[ '猫について語ります', '猫について尋ねます','犬について話します','最近行った場所を話します', '行ってみたい場所を話します', '天気や気候を尋ねます', '季節の食べ物について語ります']
+
+    @staticmethod
+    def random_topic():
+        return random.choice(PromptFactory.topics_tbl)
+
+
+    def replace( text, key, value ) ->str:
+        return text.replace("{"+key+"}",value).replace("%"+key+"%",value)
+    
+    def create_total_prompt( self ):
+        text = ""
+        # 返信フォーマット
+        text += "\n"+self.response_fmt.get("prefix","")
+        fmt_dict = self.response_fmt.get('values',{})
+        text += PromptFactory.create_format_description( fmt_dict )
+        skl = PromptFactory.create_format_skelton( fmt_dict )
+        text += "\n\n# 出力フォーマット:JSON\n"+json.dumps(skl,ensure_ascii=False)
+        # プロンプト
+        text += "\n\n# プロンプト"
+        text += PromptFactory.create_format_description( self.prompt_dict )
+        #変数置換
+        tm:float = time.time()
+        text = PromptFactory.replace(text,'datetime', PromptFactory.strftime(tm) )
+        text = PromptFactory.replace(text,'season', PromptFactory.get_season(tm) )
+        text = PromptFactory.replace(text,'randomtopic', PromptFactory.random_topic() )
+        text = PromptFactory.replace(text,'AI', PromptFactory.W_AI )
+        text = PromptFactory.replace(text,'USER', PromptFactory.W_USER )
+
+        return text
+
+    @staticmethod
+    def get_prompt_item( input:list, name, default=None ):
+        if isinstance(input,list):
+            for am in input:
+                if isinstance(am,dict):
+                    for k,vm in am.items():
+                        if k==name:
+                            if isinstance(vm,dict):
+                                return vm.get('values')
+                            return vm
+        return default
+
+    @staticmethod
+    def enum_prompt_item( input:list ):
+        if isinstance(input,list):
+            for am in input:
+                if isinstance(am,dict):
+                    for k,vm in am.items():
+                        yield k,vm
+
+    @staticmethod
+    def set_prompt_item( input:list, name, value ):
+        if isinstance(input,list):
+            for am in input:
+                if isinstance(am,dict):
+                    for k,vm in am.items():
+                        if k==name:
+                            if isinstance(value,str):
+                                am[k] = value
+                            elif isinstance(value,list):
+                                if isinstance(am[k],dict):
+                                    am[k]['values'] = value
+                                else:
+                                    am[k]= {'values',value}
+                            return
+            if isinstance(value,list):
+                input.append( { name: { 'values': value } } )
+            else:
+                input.append( { name: value } )
+
+    @staticmethod
+    def del_prompt_item( input:list, name ):
+        if isinstance(input,list):
+            for am in input:
+                if isinstance(am,dict):
+                    if name in am:
+                        del am[name]
+
+    @staticmethod
+    def create_format_description( input:list, *, indent:str = "" ):
+        text = ""
+        if isinstance(input,list) and len(input)>0:
+            n=0
+            for av in input:
+                if isinstance(av,dict):
+                    for k,am in av.items():
+                        n+=1
+                        id = f"{indent}{n}."
+                        text += "\n" + id + " " + k +": "
+                        if isinstance(am,dict):
+                            desc:str = am.get('description')
+                            if isinstance(desc,list) and len(desc)>0:
+                                for tx in desc:
+                                    text += "\n" + tx
+                            elif desc:
+                                text += desc
+                            fmt = am.get('values')
+                            text += PromptFactory.create_format_description( fmt, indent=id )
+                        else:
+                            desc:str = str(am) if am else ""
+                            if desc:
+                                text += desc
+        return text
+
+    @staticmethod
+    def create_format_skelton( input:list, *, with_value=False):
+        text=""
+        if isinstance(input,list) and len(input)>0:
+            n = 0
+            for av in input:
+                if isinstance(av,dict):
+                    for k,am in av.items():
+                        n+=1
+                        if n==1:
+                            text += "{ "
+                        else:
+                            text += ", "
+                        text += "\""+k+"\": "
+                        fmt = am.get('values') if isinstance(am,dict) else None
+                        if fmt:
+                            text += PromptFactory.create_format_skelton( fmt )
+                        else:
+                            if with_value and isinstance(am,str):
+                                text += "\""+am+"\""
+                            else:
+                                text += "\"...\""
+            if n>0:
+                text += " }"
+        return text
+
+prompt_dict =[
+    { "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。" },
+    { PromptFactory.K_PROF: {
+        "description": "%AI%のプロフィール",
+        'values': [
+          {"名前":"未設定"},
+          {"年齢":"未設定"},
+          {"性格":"未設定"},
+          {"趣味":"未設定"},
+          {"興味":"未設定"},
+          {"背景":"未設定" },
+        ]
+    } },
+    { "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。"},
+    { "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"},
+]
+response_fmt = [
+    { "topic": "この会話の短い表題" },
+    { PromptFactory.K_TALK: "%AI%の発言"},
+    { "summary": "過去の要約と、それ以降の会話を合わせた要約。"},
+    { "situation": "周囲の状況や場所、時節や会話の場面などの情報"},
+    { "thought": "%AI%による会話分析、意見、今後の方針などの思考内容。"},
+    { "conversational sate": {
+        "description": "会話の状態を示す短い説明",
+        'values': [
+            { "current": "現在のstate" },
+            { "target": "%AI%が目標とする次のstate" },
+        ]
+    }, },
+    { PromptFactory.K_FUNCS: {
+        "description": "",
+        'values': [
+            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄" },
+        ]
+    }, },
+]
+
+def setup_openai_api():
+    """
+    OpenAI APIをセットアップする関数です。
+    .envファイルからAPIキーを読み込み、表示します。
+    """
+    dotenv_path = os.path.join(Path.home(), 'Documents', 'openai_api_key.txt')
+    load_dotenv(dotenv_path)
+    
+    api_key = os.getenv("OPENAI_API_KEY")
+    print(f"OPENAI_API_KEY={api_key[:5]}***{api_key[-3:]}")
+
+global_messages=[]
+def get_response_from_openai(user_input):
+    """
+    OpenAIのAPIを使用してテキスト応答を取得する関数です。
+    """
+    global global_messages
+
+    # OpenAI APIの設定値
+    openai_timeout = 5.0  # APIリクエストのタイムアウト時間
+    openai_max_retries = 2  # リトライの最大回数
+    openai_llm_model = 'gpt-3.5-turbo'  # 使用する言語モデル
+    openai_temperature = 0.7  # 応答の多様性を決定するパラメータ
+    openai_max_tokens = 1000  # 応答の最大長
+    # プロンプトを作ります
+    pf:PromptFactory = PromptFactory( prompt_dict, response_fmt )
+    pmt = pf.create_total_prompt()
+
+    # リクエストを作ります
+    local_messages = []
+    local_messages.append( {"role": "system", "content": pmt } )
+    for m in global_messages:
+        local_messages.append( m )
+    local_messages.append( {"role": "user", "content": user_input} )
+    
+    # OpenAIクライアントを初期化します。
+    client:OpenAI = OpenAI( timeout=openai_timeout, max_retries=openai_max_retries )
+    # 通信します
+    stream:ChatCompletionChunk = client.chat.completions.create(
+        model=openai_llm_model,
+        messages=local_messages,
+        max_tokens=openai_max_tokens,
+        temperature=openai_temperature,
+        stream=True, response_format={"type":"json_object"}
+    )
+    # 受信領域初期化
+    assistant_content=""
+    result_dict=None
+    before_ai_response = ""
+    parser:JsonStreamParser = JsonStreamParser()
+    # stream受信開始
+    # AIの応答を取得します
+    for part in stream:
+        # セグメント取得
+        delta_response = part.choices[0].delta.content or ""
+        assistant_content+=delta_response
+        # JSONパース
+        try:
+            result_dict = parser.put(delta_response)
+            if not isinstance(result_dict,dict):
+                result_dict = { PromptFactory.K_TALK: result_dict }
+        except:
+            logger.error( f'response parse error {assistant_content}')
+        # セリフ取得
+        ai_response= result_dict.get( PromptFactory.K_TALK) if result_dict is not None else ""
+        ai_response = ai_response if ai_response else ""
+        # 前回との差分から増加分テキストを算出
+        if len(ai_response)>len(before_ai_response):
+            seg = ai_response[len(before_ai_response):]
+            before_ai_response = ai_response
+            # AIの応答を返します
+            yield seg
+
+    # 履歴に記録します。
+    global_messages.append( {"role": "user", "content": user_input} )
+    global_messages.append( {"role": "assistant", "content": assistant_content} )
+    #
+    pf.update_profile( result_dict )
+
+
+def process_chat():
+    """
+    ユーザーからの入力を受け取り、OpenAI APIを使用して応答を生成し、
+    その応答を表示する関数です。
+    """
+    try:
+        while True:
+            user_input = input("ChatGPTにメッセージを送る...(Ctrl+DまたはCtrl+Zで終了): ")
+            print("===")
+            response = get_response_from_openai(user_input)
+            for cc in response:
+                print(cc,end="")
+            print("===")
+    except EOFError:
+        print("\nプログラムを終了します。")
+
+def main():
+    """
+    メイン関数です。APIのセットアップを行い、チャット処理を開始します。
+    """
+    setup_openai_api()
+    process_chat()
+
+def test3():
+    txt = PromptFactory.create_format_description( prompt_dict )
+    print("---prompt---")
+    print(txt)
+    txt = PromptFactory.create_format_description( response_fmt )
+    print("---response description---")
+    print(txt)
+    txt = PromptFactory.create_format_skelton( response_fmt )
+    print("---response format---")
+    print(txt)
+
+    prof = PromptFactory.get_prompt_item( prompt_dict, PromptFactory.K_PROF )
+    txt = PromptFactory.create_format_skelton( prof )
+    print("---profile format---")
+    print(txt)
+    print("---update request---")
+    res_dict = {
+        PromptFactory.K_FUNCS: {
+            PromptFactory.K_UPDATE_PROF: '名前をミユキに変更'
+        }
+    }
+    print( json.dumps( res_dict,ensure_ascii=False) )
+    print("---update request---")
+    setup_openai_api()
+    pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
+    pf.update_profile( res_dict )
+    txt = PromptFactory.create_format_description( pf.prompt_dict )
+    print("---update result---")
+    print(txt)
+
+    # xprof = PromptFactory.get_prompt_item( prompt_dict, PromptFactory.K_PROF )
+    # print(xprof)
+    PromptFactory.set_prompt_item( prompt_dict, PromptFactory.K_PROF, [] )
+    # xprof = PromptFactory.get_prompt_item( prompt_dict, PromptFactory.K_PROF )
+    # print(xprof)
+    pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
+    pf.update_profile( res_dict )
+    txt = PromptFactory.create_format_description( pf.prompt_dict )
+    print("---update result---")
+    print(txt)
+
+    PromptFactory.del_prompt_item( prompt_dict, PromptFactory.K_PROF )
+    xprof = PromptFactory.get_prompt_item( prompt_dict, PromptFactory.K_PROF )
+    print(xprof)
+    pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
+    pf.update_profile( res_dict )
+    txt = PromptFactory.create_format_description( pf.prompt_dict )
+    print("---update result---")
+    print(txt)
+
+def test4():
+    setup_openai_api()
+    pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
+    txt = 'タスクの口調を堅苦しいに変更' #'名前をミユキに変更'
+    pf.feedback( txt )
+
+if __name__ == "__main__":
+    #main()
+    test3()
