@@ -15,6 +15,13 @@ print(f"__name__:{__name__}")
 sys.path.append(os.getcwd())
 from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
 
+def json_encode(text:str)->str:
+    try:
+        jtext:str =json.dumps( {"x":text}, ensure_ascii=False )
+        return jtext[7:-2]
+    except:
+        return text
+    
 class PromptFactory:
     W_AI="AI"
     W_USER="User"
@@ -51,33 +58,65 @@ class PromptFactory:
         return None
 
     def feedback(self, text:str ):
-        current_dict = {}
-        key_list = [ 'role', 'task']
-        for k in key_list:
-            v = PromptFactory.get_prompt_item( self.prompt_dict, k )
-            if isinstance(v,str):
-                current_dict[k]=v
-        p = PromptFactory.get_prompt_item( self.prompt_dict, PromptFactory.K_PROF )
-        for k,v in PromptFactory.enum_prompt_item( p ):
-            current_dict[k]=v
 
-        txt = "# 以下はLLMへのプロンプトです。\n"
-        txt += json.dumps( current_dict, ensure_ascii=False )
-        txt += "\n"
-        txt += "# 修正リクエスト\n"
-        txt += text
-        txt += '\n'
-        txt += "# 修正した結果を同じJSONフォーマットで出力"
-        print(txt)
-        xxx = self._LLM( txt, json_obj=True)
-        print(xxx)
-        update_dict = json.loads(xxx)
-        for k in key_list:
-            v = update_dict.get(k)
-            if v:
-                PromptFactory.set_prompt_item(self.prompt_dict,k,v)
+        try:
+            current_dict = {}
+            # 現状のtask
+            xc_task = PromptFactory.get_prompt_item( self.prompt_dict, 'task' )
+            current_dict['task'] = xc_task
+            # 現状のprofile
+            current_prof_dict = {}
+            current_dict[PromptFactory.K_PROF] = current_prof_dict
+            profile_dict = PromptFactory.get_prompt_item( self.prompt_dict, PromptFactory.K_PROF )
+            for k,v in PromptFactory.enum_prompt_item( profile_dict ):
+                current_prof_dict[k] = v
+
+            txt = "# your task\n"
+            txt += "The json data shown below is prompt data to another LLM, not you. Please correct this data by following the correction request below.\n\n"
+            txt += "# Prompt for another LLM\n"
+            orig_txt = json.dumps( current_dict, ensure_ascii=False )
+            txt += orig_txt
+            txt += "\n\n"
+            txt += "# Correction request.\n"
+            txt += text
+            txt += '\n\n'
+            txt += "# Output format: JSON\n"
+            txt += "{ \"task\" : \"値\", \""+PromptFactory.K_PROF+"\": { \"項目\": \"値\", ... } }"
+
+            update = self._LLM( txt, json_obj=True)
+
+            print(f"UpdateProfile\n{orig_txt}\n---\n{update}\n---")
+            if not update:
+                return
+            try:
+                update_dic:dict = json.loads(update)
+            except:
+                logger.exception('invalid json response from llm ')
+                return
+            for k in ['task']:
+                if k in update_dic:
+                    v = update_dic[k]
+                    del update_dic[k]
+                    if v:
+                        PromptFactory.set_prompt_item(self.prompt_dict,k,v)
+            upd_prof_dic = update_dic.get(PromptFactory.K_PROF)
+            if upd_prof_dic:
+                new_prof_dict = profile_dict if isinstance(profile_dict,list) else []
+                for k,v in upd_prof_dic.items():
+                    PromptFactory.set_prompt_item( new_prof_dict, k, v )
+                if not isinstance(profile_dict,list):
+                    PromptFactory.set_prompt_item( self.prompt_dict, PromptFactory.K_PROF, new_prof_dict )
+                print( "---変更後のプロンプト\n"+PromptFactory.create_format_description( self.prompt_dict ) )
+        except:
+            logger.exception('can not update profile')
 
     def update_profile(self, result_dict:str ):
+        funcs = result_dict.get( PromptFactory.K_FUNCS)
+        request_text = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
+        if request_text and request_text!="None" and request_text!="null" and request_text!="未設定":
+            return self.feedback(request_text)
+
+    def update_profileold(self, result_dict:str ):
         funcs = result_dict.get( PromptFactory.K_FUNCS)
         request_text = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
         if request_text and request_text!="None" and request_text!="null" and request_text!="未設定":
@@ -197,13 +236,14 @@ class PromptFactory:
     def create_total_prompt( self ):
         text = ""
         # 返信フォーマット
-        text += "\n"+self.response_fmt.get("prefix","")
-        fmt_dict = self.response_fmt.get('values',{})
-        text += PromptFactory.create_format_description( fmt_dict )
-        skl = PromptFactory.create_format_skelton( fmt_dict )
-        text += "\n\n# 出力フォーマット:JSON\n"+json.dumps(skl,ensure_ascii=False)
+        text += "# 出力項目\n"
+        text += PromptFactory.create_format_description( self.response_fmt )
+        text += "\n\n"
+        text += "# 出力フォーマット:JSON\n"
+        text += PromptFactory.create_format_skelton( self.response_fmt )
+        text += "\n\n"
         # プロンプト
-        text += "\n\n# プロンプト"
+        text += "# プロンプト"
         text += PromptFactory.create_format_description( self.prompt_dict )
         #変数置換
         tm:float = time.time()
@@ -508,9 +548,10 @@ def test3():
 def test4():
     setup_openai_api()
     pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
-    txt = 'タスクの口調を堅苦しいに変更' #'名前をミユキに変更'
+    txt = 'タスクにモーニングコールを追加' #'名前をミユキに変更'
     pf.feedback( txt )
 
 if __name__ == "__main__":
-    #main()
-    test3()
+    main()
+    #test3()
+

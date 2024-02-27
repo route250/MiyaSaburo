@@ -17,8 +17,9 @@ sys.path.append(os.getcwd())
 # sys.path.append('/home/maeda/LLM/MiyaSaburo/MiyaSaburo')
 from MiyaSaburo.voice import VoiceTalkEngine
 from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
+from prompt_factory import PromptFactory
 
-class PromptFactory:
+class PromptFactoryOld:
     W_AI="AI"
     W_USER="User"
     K_FUNCS='functions'
@@ -51,10 +52,10 @@ class PromptFactory:
         return None
 
     def update_profile(self, result_dict:str ):
-        funcs = result_dict.get( PromptFactory.K_FUNCS)
-        profile = funcs.get( PromptFactory.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
+        funcs = result_dict.get( PromptFactoryOld.K_FUNCS)
+        profile = funcs.get( PromptFactoryOld.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
         if profile and profile!="None" and profile!="null" and profile!="未設定":
-            key=PromptFactory.K_PROF
+            key=PromptFactoryOld.K_PROF
             orig = self.prompt_dict.get(key,"")
             if not profile in orig:
                 txt = '下記の既存プロファイルに更新プロファイルをマージして結果のプロファイルだけを出力'
@@ -120,8 +121,8 @@ class PromptFactory:
         if isinstance( value, float ) and value>0.0:
             """unixtimeをフォーマットする"""
             dt=datetime.datetime.fromtimestamp(value)
-            season=PromptFactory.get_season(dt)
-            tod = PromptFactory.time_of_day_tbl[dt.hour]
+            season=PromptFactoryOld.get_season(dt)
+            tod = PromptFactoryOld.time_of_day_tbl[dt.hour]
             text = dt.strftime('%Y年%m月%d '+season+' '+tod+'%H時%M分')
             # 正規表現で不要な"0"を削除 ただし、"0時"はそのまま残す
             text = re.sub(r'(?<!\d)0', '', text)  # 先頭の0を削除、ただし数字の後ろの0は残す
@@ -133,7 +134,7 @@ class PromptFactory:
 
     @staticmethod
     def random_topic():
-        return random.choice(PromptFactory.topics_tbl)
+        return random.choice(PromptFactoryOld.topics_tbl)
 
 
     def replace( text, key, value ) ->str:
@@ -144,19 +145,19 @@ class PromptFactory:
         # 返信フォーマット
         text += "\n"+self.response_fmt.get("prefix","")
         fmt_dict = self.response_fmt.get("format",{})
-        text += PromptFactory.create_prompt_fmt2( fmt_dict )
-        skl = PromptFactory.convert_to_skelton( fmt_dict )
+        text += PromptFactoryOld.create_prompt_fmt2( fmt_dict )
+        skl = PromptFactoryOld.convert_to_skelton( fmt_dict )
         text += "\n\n# 出力フォーマット:JSON\n"+json.dumps(skl,ensure_ascii=False)
         # プロンプト
         text += "\n\n# プロンプト"
-        text += PromptFactory.create_prompt_fmt2( self.prompt_dict )
+        text += PromptFactoryOld.create_prompt_fmt2( self.prompt_dict )
         #変数置換
         tm:float = time.time()
-        text = PromptFactory.replace(text,'datetime', PromptFactory.strftime(tm) )
-        text = PromptFactory.replace(text,'season', PromptFactory.get_season(tm) )
-        text = PromptFactory.replace(text,'randomtopic', PromptFactory.random_topic() )
-        text = PromptFactory.replace(text,'AI', PromptFactory.W_AI )
-        text = PromptFactory.replace(text,'USER', PromptFactory.W_USER )
+        text = PromptFactoryOld.replace(text,'datetime', PromptFactoryOld.strftime(tm) )
+        text = PromptFactoryOld.replace(text,'season', PromptFactoryOld.get_season(tm) )
+        text = PromptFactoryOld.replace(text,'randomtopic', PromptFactoryOld.random_topic() )
+        text = PromptFactoryOld.replace(text,'AI', PromptFactoryOld.W_AI )
+        text = PromptFactoryOld.replace(text,'USER', PromptFactoryOld.W_USER )
 
         return text
 
@@ -168,7 +169,7 @@ class PromptFactory:
             id = f"{indent}{n}."
             if isinstance(v,dict):
                 pmt += f"{id} {k}:"
-                pmt += PromptFactory.create_prompt_fmt2( v, indent=id )
+                pmt += PromptFactoryOld.create_prompt_fmt2( v, indent=id )
             else:
                 pmt += f"{id} {k}: {v}"
         return pmt
@@ -177,11 +178,11 @@ class PromptFactory:
         if isinstance(fmt,dict):
             ret = {}
             for k,v in fmt.items():
-                ret[k]=PromptFactory.convert_to_skelton(v)
+                ret[k]=PromptFactoryOld.convert_to_skelton(v)
         elif isinstance(fmt,list):
             ret = []
             for idx,v in enumerate(fmt):
-                ret[idx] = PromptFactory.convert_to_skelton(v)
+                ret[idx] = PromptFactoryOld.convert_to_skelton(v)
         else:
             ret = "..."
         return ret
@@ -239,7 +240,7 @@ prompt_fmt="""
 """
 prompt_dict = {
     "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。",
-    PromptFactory.K_PROF: "%AI%のプロフィール\n名前:未設定\n年齢:未設定\n性格:未設定\n趣味:未設定\n興味:未設定\n背景:未設定",
+    PromptFactoryOld.K_PROF: "%AI%のプロフィール\n名前:未設定\n年齢:未設定\n性格:未設定\n趣味:未設定\n興味:未設定\n背景:未設定",
     "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。",
     "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"
 }
@@ -255,12 +256,48 @@ response_fmt = {
             "current": "現在の会話の状態を示す短い説明",
             "target": "会話をどのような状態に誘導するべきかを示す短い説明"
         },
-        PromptFactory.K_FUNCS: {
-            PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄",
+        PromptFactoryOld.K_FUNCS: {
+            PromptFactoryOld.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄",
         }
     }
 }
 
+prompt_dict =[
+    { "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。" },
+    { PromptFactory.K_PROF: {
+        "description": "%AI%のプロフィール",
+        'values': [
+          {"名前":"未設定"},
+          {"年齢":"未設定"},
+          {"性格":"未設定"},
+          {"趣味":"未設定"},
+          {"興味":"未設定"},
+          {"背景":"未設定" },
+        ]
+    } },
+    { "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。"},
+    { "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"},
+]
+response_fmt = [
+    { "topic": "この会話の短い表題" },
+    { PromptFactory.K_TALK: "%AI%の発言"},
+    { "summary": "過去の要約と、それ以降の会話を合わせた要約。"},
+    { "situation": "周囲の状況や場所、時節や会話の場面などの情報"},
+    { "thought": "%AI%による会話分析、意見、今後の方針などの思考内容。"},
+    { "conversational sate": {
+        "description": "会話の状態を示す短い説明",
+        'values': [
+            { "current": "現在のstate" },
+            { "target": "%AI%が目標とする次のstate" },
+        ]
+    }, },
+    { PromptFactory.K_FUNCS: {
+        "description": "",
+        'values': [
+            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄" },
+        ]
+    }, },
+]
 
 def main():
     from datetime import datetime
@@ -331,7 +368,7 @@ def main():
                         result_dict = parser.put(delta_response)
                     except:
                         logger.error( f'response parse error {assistant_content}')
-                    talk_text= result_dict.get("speech") if result_dict is not None else ""
+                    talk_text= result_dict.get("shortTalk") if result_dict is not None else ""
                     talk_text = talk_text if talk_text else ""
                     seg = talk_text[len(before_talk_text):]
                     before_talk_text = talk_text
@@ -372,18 +409,6 @@ def test2():
     mics = get_mic_devices()
     for m in mics:
         print(m)
-def test3():
-    pf:PromptFactory = PromptFactory( prompt_dict, response_fmt )
-    txt = pf.create_total_prompt()
-    print(txt)
-
-    result_dict={
-        "functions": {"update_AI_profile": "名前: みきちゃん"}
-    }
-    pf.update_profile( result_dict )
-    txt = pf.create_total_prompt()
-
-    print(txt)
 
 if __name__ == "__main__":
     #test3()
