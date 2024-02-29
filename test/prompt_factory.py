@@ -28,7 +28,7 @@ class PromptFactory:
     K_TALK="shortTalk"
     K_FUNCS='functions'
     K_PROF='profile'
-    K_UPDATE_PROF='Update_Profile'
+    K_UPDATE_PROF='Update_Profile_or_Task'
 
     def __init__(self, prompt_dict, response_fmt ):
         self.orig_prompt_dict = copy.deepcopy(prompt_dict)
@@ -71,14 +71,17 @@ class PromptFactory:
             for k,v in PromptFactory.enum_prompt_item( profile_dict ):
                 current_prof_dict[k] = v
 
-            txt = "# your task\n"
-            txt += "The json data shown below is prompt data to another LLM, not you. Please correct this data by following the correction request below.\n\n"
-            txt += "# Prompt for another LLM\n"
+            txt = "# Input\n"
+            txt += "The json data shown below is prompt data to another LLM, not you.\n\n"
             orig_txt = json.dumps( current_dict, ensure_ascii=False )
             txt += orig_txt
             txt += "\n\n"
-            txt += "# Correction request.\n"
+            txt += "\n\n"
+            txt += "# Update Request.\n"
             txt += text
+            txt += '\n\n'
+            txt += "# Your task.\n"
+            txt += "リクエストから追加変更削除する項目を検討し、profileまたはtaskの内容に追加変更する内容を考えて編集結果を出力して\n\n"
             txt += '\n\n'
             txt += "# Output format: JSON\n"
             txt += "{ \"task\" : \"値\", \""+PromptFactory.K_PROF+"\": { \"項目\": \"値\", ... } }"
@@ -216,7 +219,7 @@ class PromptFactory:
             dt=datetime.datetime.fromtimestamp(value)
             season=PromptFactory.get_season(dt)
             tod = PromptFactory.time_of_day_tbl[dt.hour]
-            text = dt.strftime('%Y年%m月%d '+season+' '+tod+'%H時%M分')
+            text = dt.strftime('%Y年%m月%d日 %A '+season+' '+tod+'%H時%M分')
             # 正規表現で不要な"0"を削除 ただし、"0時"はそのまま残す
             text = re.sub(r'(?<!\d)0', '', text)  # 先頭の0を削除、ただし数字の後ろの0は残す
             return text
@@ -548,7 +551,8 @@ def test3():
 def test4():
     setup_openai_api()
     pf:PromptFactory = PromptFactory(  prompt_dict, response_fmt )
-    txt = 'タスクにモーニングコールを追加' #'名前をミユキに変更'
+    txt = 'タスクに、時々クイズを出題するを追加' #'名前をミユキに変更'
+    txt = '名前をミユキに変更'
     pf.feedback( txt )
 
 if __name__ == "__main__":

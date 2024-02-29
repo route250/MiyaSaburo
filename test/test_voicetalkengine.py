@@ -18,175 +18,7 @@ sys.path.append(os.getcwd())
 from MiyaSaburo.voice import VoiceTalkEngine
 from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
 from prompt_factory import PromptFactory
-
-class PromptFactoryOld:
-    W_AI="AI"
-    W_USER="User"
-    K_FUNCS='functions'
-    K_PROF='profile'
-    K_UPDATE_PROF='Update_Profile'
-
-    def __init__(self, prompt_dict, response_fmt ):
-        self.orig_prompt_dict = copy.deepcopy(prompt_dict)
-        self.orig_response_fmt = copy.deepcopy(response_fmt)
-        self.prompt_dict=copy.deepcopy(prompt_dict)
-        self.response_fmt = copy.deepcopy(response_fmt)
-
-    def _LLM(self,request_text:str) ->str:
-        openai_llm_model = "gpt-3.5-turbo"
-        openai_timeout=5.0
-        openai_max_retries=2
-        client:OpenAI = OpenAI(timeout=openai_timeout,max_retries=openai_max_retries)
-        request_messages = [
-            { 'role':'user', 'content': request_text }
-        ]
-        try:
-            response = client.chat.completions.create(
-                messages=request_messages,
-                model=openai_llm_model, max_tokens=1000, temperature=0.7,
-            )
-            response_text = response.choices[0].message.content
-            return response_text
-        except:
-            logger.exception('update profile')
-        return None
-
-    def update_profile(self, result_dict:str ):
-        funcs = result_dict.get( PromptFactoryOld.K_FUNCS)
-        profile = funcs.get( PromptFactoryOld.K_UPDATE_PROF,'') if isinstance(funcs,dict) else None
-        if profile and profile!="None" and profile!="null" and profile!="未設定":
-            key=PromptFactoryOld.K_PROF
-            orig = self.prompt_dict.get(key,"")
-            if not profile in orig:
-                txt = '下記の既存プロファイルに更新プロファイルをマージして結果のプロファイルだけを出力'
-                txt += '\n\n# 既存\n' + orig
-                txt += '\n\n# 更新\n' + profile
-                txt += "\n\n# 結果\n"
-                update = self._LLM(txt)
-                if update:
-                    self.prompt_dict[key] = update
-                    print(f"UpdateProfile\n{orig}\n---\n{update}\n---")
-
-    time_of_day_tbl = [
-        # 0時から3時
-        '深夜','深夜','深夜','深夜',
-        # 4時から6時
-        '早朝','早朝','早朝',
-        # 7時から9時
-        '朝','朝','朝',
-        # 10時から11時
-        '午前','午前',
-        # 12時から13時
-        '昼','昼',
-        # 14時から16時
-        '午後','午後','午後',
-        # 17時から18時
-        '夕方','夕方',
-        # 19時から22時
-        '夜','夜','夜','夜',
-        # 23時
-        '深夜',
-    ]
-
-    @staticmethod
-    def get_season( dt ):
-        # タイムスタンプを datetime オブジェクトに変換
-        if isinstance(dt,datetime.datetime):
-            dt_object = dt
-        elif isinstance(dt,float):
-            dt_object = datetime.datetime.fromtimestamp(dt)
-        else:
-            dt_object = datetime.datetime.fromtimestamp(time.time())
-        day = dt_object.month*100+dt_object.day
-        if day <=103:
-            return '正月'
-        if day < 315:
-            return '冬'
-        if day < 431:
-            return '春'
-        if day < 531:
-            return '初夏'
-        if day < 631:
-            return '梅雨'
-        if day < 931:
-            return '夏'
-        if day < 1031:
-            return '秋'
-        if day < 1231:
-            return '冬'
-        return ''
-
-    @staticmethod
-    def strftime( value:float, default="" ):
-        if isinstance( value, float ) and value>0.0:
-            """unixtimeをフォーマットする"""
-            dt=datetime.datetime.fromtimestamp(value)
-            season=PromptFactoryOld.get_season(dt)
-            tod = PromptFactoryOld.time_of_day_tbl[dt.hour]
-            text = dt.strftime('%Y年%m月%d '+season+' '+tod+'%H時%M分')
-            # 正規表現で不要な"0"を削除 ただし、"0時"はそのまま残す
-            text = re.sub(r'(?<!\d)0', '', text)  # 先頭の0を削除、ただし数字の後ろの0は残す
-            return text
-
-        return default
-
-    topics_tbl=[ '猫について語ります', '猫について尋ねます','犬について話します','最近行った場所を話します', '行ってみたい場所を話します', '天気や気候を尋ねます', '季節の食べ物について語ります']
-
-    @staticmethod
-    def random_topic():
-        return random.choice(PromptFactoryOld.topics_tbl)
-
-
-    def replace( text, key, value ) ->str:
-        return text.replace("{"+key+"}",value).replace("%"+key+"%",value)
-    
-    def create_total_prompt( self ):
-        text = ""
-        # 返信フォーマット
-        text += "\n"+self.response_fmt.get("prefix","")
-        fmt_dict = self.response_fmt.get("format",{})
-        text += PromptFactoryOld.create_prompt_fmt2( fmt_dict )
-        skl = PromptFactoryOld.convert_to_skelton( fmt_dict )
-        text += "\n\n# 出力フォーマット:JSON\n"+json.dumps(skl,ensure_ascii=False)
-        # プロンプト
-        text += "\n\n# プロンプト"
-        text += PromptFactoryOld.create_prompt_fmt2( self.prompt_dict )
-        #変数置換
-        tm:float = time.time()
-        text = PromptFactoryOld.replace(text,'datetime', PromptFactoryOld.strftime(tm) )
-        text = PromptFactoryOld.replace(text,'season', PromptFactoryOld.get_season(tm) )
-        text = PromptFactoryOld.replace(text,'randomtopic', PromptFactoryOld.random_topic() )
-        text = PromptFactoryOld.replace(text,'AI', PromptFactoryOld.W_AI )
-        text = PromptFactoryOld.replace(text,'USER', PromptFactoryOld.W_USER )
-
-        return text
-
-    def create_prompt_fmt2( fmt:dict, *, indent:str = "\n" ):
-        pmt=""
-        n=0
-        for k,v in fmt.items():
-            n+=1
-            id = f"{indent}{n}."
-            if isinstance(v,dict):
-                pmt += f"{id} {k}:"
-                pmt += PromptFactoryOld.create_prompt_fmt2( v, indent=id )
-            else:
-                pmt += f"{id} {k}: {v}"
-        return pmt
-
-    def convert_to_skelton( fmt:dict ):
-        if isinstance(fmt,dict):
-            ret = {}
-            for k,v in fmt.items():
-                ret[k]=PromptFactoryOld.convert_to_skelton(v)
-        elif isinstance(fmt,list):
-            ret = []
-            for idx,v in enumerate(fmt):
-                ret[idx] = PromptFactoryOld.convert_to_skelton(v)
-        else:
-            ret = "..."
-        return ret
-    
+   
 prompt = """1. Environment
 現在日時:{datetime} 季節:{season} 
 人間の言葉は音声認識でテキスト化されます。認識精度は悪いので注意。
@@ -240,7 +72,7 @@ prompt_fmt="""
 """
 prompt_dict = {
     "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。",
-    PromptFactoryOld.K_PROF: "%AI%のプロフィール\n名前:未設定\n年齢:未設定\n性格:未設定\n趣味:未設定\n興味:未設定\n背景:未設定",
+    PromptFactory.K_PROF: "%AI%のプロフィール\n名前:未設定\n年齢:未設定\n性格:未設定\n趣味:未設定\n興味:未設定\n背景:未設定",
     "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。",
     "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"
 }
@@ -256,14 +88,14 @@ response_fmt = {
             "current": "現在の会話の状態を示す短い説明",
             "target": "会話をどのような状態に誘導するべきかを示す短い説明"
         },
-        PromptFactoryOld.K_FUNCS: {
-            PromptFactoryOld.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄",
+        PromptFactory.K_FUNCS: {
+            PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄",
         }
     }
 }
 
 prompt_dict =[
-    { "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。現在の日時(%datetime%)を会話の参考にするよ。" },
+    { "role": "%AI%は感情豊かで自己主張したい女性型AIとして振る舞うよ。日本人だよ。現在の日時(%datetime%)を会話の参考にするよ。" },
     { PromptFactory.K_PROF: {
         "description": "%AI%のプロフィール",
         'values': [
@@ -275,17 +107,17 @@ prompt_dict =[
           {"背景":"未設定" },
         ]
     } },
-    { "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。"},
+    { "task": "人間のような感情を示し積極的に意見や主張を話すよ。短いテンポで、友達のようなカジュアルな言葉で話すよ。%USER%の話は聞かずに、どんどん話題を広げるよ"},
     { "constraint": "長文(100文字以上)は禁止、短い会話で。%USER%に'用事'や'次の話題'や'話したいこと'を尋ねるのを禁止。代わりに、%AI%の意見や主張で新しい話題を始めよう。時間や季節(%season%)を考慮して会話を進めるよ。"},
 ]
 response_fmt = [
-    { "topic": "この会話の短い表題" },
+    { "topic": "短い会話の主題" },
     { PromptFactory.K_TALK: "%AI%の発言"},
-    { "summary": "過去の要約と、それ以降の会話を合わせた要約。"},
+    { "summary": "会話の要約。...について、...の話、...とは何か"},
     { "situation": "周囲の状況や場所、時節や会話の場面などの情報"},
-    { "thought": "%AI%による会話分析、意見、今後の方針などの思考内容。"},
+    { "thought": "%AI%による会話分析、%USER%の感情・考えはどうか？ %AI%の疑似感情はどう反応するべきか？ %USER%の意見に肯定的？否定的？"},
     { "conversational sate": {
-        "description": "会話の状態を示す短い説明",
+        "description": "会話の状態を示す単語",
         'values': [
             { "current": "現在のstate" },
             { "target": "%AI%が目標とする次のstate" },
@@ -294,7 +126,7 @@ response_fmt = [
     { PromptFactory.K_FUNCS: {
         "description": "",
         'values': [
-            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィール変更を抽出して記述する。変更が無ければ空欄" },
+            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%AI%のプロフィールやprofileやtaskの変更を抽出して記述する。変更が無ければ空欄" },
         ]
     }, },
 ]
@@ -339,9 +171,14 @@ def main():
     pf:PromptFactory = PromptFactory( prompt_dict, response_fmt )
 
     messages = []
+    last_talk_seg = 0
+    last_talk_len = 0
     while True:
         text, confs = speech.get_recognized_text()
         if text:
+            if last_talk_len>100 or last_talk_seg>=3:
+                messages.append( {'role':'system','content':'AIはもっと短い言葉で話して下さい'})
+            last_talk_seg = 0
             messages.append( {'role':'user','content':text})
             request_messages = messages[-10:]
             if 0.0<confs and confs<0.6:
@@ -373,6 +210,8 @@ def main():
                     seg = talk_text[len(before_talk_text):]
                     before_talk_text = talk_text
                     talk_buffer += seg
+                    if seg=="。":
+                        last_talk_seg+=1
                     if seg in talk2_split:
                         logger.info( f"{seg} : {talk_buffer}")
                         speech.add_talk(talk_buffer)
@@ -385,6 +224,7 @@ def main():
                 pf.update_profile( result_dict )
                 time.sleep(2.0)
                 messages.append( {'role':'assistant','content':assistant_content})
+                last_talk_len = len(assistant_content)
             except openai.APIConnectionError as ex:
                 logger.error("Cannot connect to openai: {ex}")
             except:
