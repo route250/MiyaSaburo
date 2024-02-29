@@ -162,7 +162,8 @@ def main():
     openai_llm_model='gpt-3.5-turbo'
     speech:VoiceTalkEngine = VoiceTalkEngine()
 
-    speech.start()
+    input_mode=True
+    speech.start(stt=input_mode)
     logger.info("##STARTED##")
 
     talk1_split = [ "、", " ", "　" ]
@@ -174,7 +175,11 @@ def main():
     last_talk_seg = 0
     last_talk_len = 0
     while True:
-        text, confs = speech.get_recognized_text()
+        if input_mode:
+            text, confs = speech.get_recognized_text()
+        else:
+            confs=1.0
+            text = input("何か入力してください（Ctrl+DまたはCtrl+Zで終了）: ")
         if text:
             if last_talk_len>100 or last_talk_seg>=3:
                 messages.append( {'role':'system','content':'AIはもっと短い言葉で話して下さい'})
@@ -183,7 +188,8 @@ def main():
             request_messages = messages[-10:]
             if 0.0<confs and confs<0.6:
                 request_messages.insert( len(request_messages)-2, {'role':'system','content':f'次のメッセージは、音声認識結果のconfidence={confs}'})
-            request_messages.insert(0, {'role':'system','content':pf.create_total_prompt()})
+            request_messages.insert(0, {'role':'system','content': "# 以下はここまでの会話履歴です。"})
+            request_messages.append( {'role':'system','content':pf.create_total_prompt()} )
             openai_timeout=15.0
             openai_max_retries=2
             try:
@@ -194,19 +200,21 @@ def main():
                         stream=True, response_format={"type":"json_object"}
                 )
                 talk_buffer = ""
+                assistant_response=""
                 assistant_content=""
                 result_dict=None
                 before_talk_text = ""
                 parser:JsonStreamParser = JsonStreamParser()
                 for part in stream:
                     delta_response = part.choices[0].delta.content or ""
-                    assistant_content+=delta_response
+                    assistant_response+=delta_response
                     try:
                         result_dict = parser.put(delta_response)
                     except:
-                        logger.error( f'response parse error {assistant_content}')
+                        logger.error( f'response parse error {assistant_response}')
                     talk_text= result_dict.get("shortTalk") if result_dict is not None else ""
                     talk_text = talk_text if talk_text else ""
+                    assistant_content = talk_text
                     seg = talk_text[len(before_talk_text):]
                     before_talk_text = talk_text
                     talk_buffer += seg
@@ -219,8 +227,8 @@ def main():
                 if talk_buffer:
                     speech.add_talk(talk_buffer)
                 speech.add_talk(VoiceTalkEngine.EOT)
-                print( "chat response" )
-                print( assistant_content )
+                # print( "chat response" )
+                # print( assistant_response )
                 pf.update_profile( result_dict )
                 time.sleep(2.0)
                 messages.append( {'role':'assistant','content':assistant_content})

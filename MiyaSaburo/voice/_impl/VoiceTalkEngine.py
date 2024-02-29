@@ -46,9 +46,10 @@ class VoiceTalkEngine:
             elif stat == VoiceTalkEngine.ST_TALK_END:
                 logger.info( f"[VoiceTalkEngine] talk END" )
 
-    def start(self):
+    def start(self, *, stt=True):
         self._status = VoiceTalkEngine.ST_LISTEN
-        self.stt.start_recording()
+        if stt:
+            self.stt.start_recording()
 
     def stop(self):
         self._status = VoiceTalkEngine.ST_STOPPED
