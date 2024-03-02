@@ -448,7 +448,10 @@ def setup_openai_api():
     load_dotenv(dotenv_path)
     
     api_key = os.getenv("OPENAI_API_KEY")
-    print(f"OPENAI_API_KEY={api_key[:5]}***{api_key[-3:]}")
+    if api_key:
+        print(f"OPENAI_API_KEY={api_key[:5]}***{api_key[-3:]}")
+    else:
+        print(f"OPENAI_API_KEY=None")
 
 global_messages=[]
 def get_response_from_openai(user_input):
@@ -533,7 +536,7 @@ def main_chat():
             for cc in response:
                 print(cc,end="")
             print("===")
-    except EOFError:
+    except (EOFError,KeyboardInterrupt):
         print("\nプログラムを終了します。")
 
 def test_prompt():

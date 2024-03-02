@@ -17,7 +17,7 @@ sys.path.append(os.getcwd())
 # sys.path.append('/home/maeda/LLM/MiyaSaburo/MiyaSaburo')
 from MiyaSaburo.voice import VoiceTalkEngine
 from MiyaSaburo.tools import JsonStreamParser, JsonStreamParseError
-from prompt_factory import PromptFactory
+from prompt_factory import PromptFactory, setup_openai_api
    
 prompt = """1. Environment
 現在日時:{datetime} 季節:{season} 
@@ -174,6 +174,7 @@ response_fmt = [
 ]
 
 def main():
+    setup_openai_api()
     from datetime import datetime
 
     # 現在の日時を取得し、ファイル名に適した形式にフォーマット
@@ -283,6 +284,10 @@ def main():
                 last_talk_len = len(assistant_content)
             except openai.APIConnectionError as ex:
                 logger.error("Cannot connect to openai: {ex}")
+            except openai.OpenAIError:
+                logger.error("openai: {ex}")
+            except KeyboardInterrupt:
+                pass
             except:
                 logger.exception('')
         else:
