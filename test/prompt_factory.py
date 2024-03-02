@@ -27,8 +27,9 @@ class PromptFactory:
     W_USER="User"
     K_TALK="shortTalk"
     K_FUNCS='functions'
+    K_PSEUDO_PERSONAL = 'pseudo-personality'
     K_PROF='profile'
-    K_UPDATE_PROF='Update_Profile_or_Task'
+    K_UPDATE_PROF='Update-profile'
 
     def __init__(self, prompt_dict, response_fmt ):
         self.orig_prompt_dict = copy.deepcopy(prompt_dict)
@@ -253,6 +254,7 @@ class PromptFactory:
         text = PromptFactory.replace(text,'datetime', PromptFactory.strftime(tm) )
         text = PromptFactory.replace(text,'season', PromptFactory.get_season(tm) )
         text = PromptFactory.replace(text,'randomtopic', PromptFactory.random_topic() )
+        text = PromptFactory.replace(text,'PERSONAL', PromptFactory.K_PSEUDO_PERSONAL )
         text = PromptFactory.replace(text,'AI', PromptFactory.W_AI )
         text = PromptFactory.replace(text,'USER', PromptFactory.W_USER )
 
@@ -395,6 +397,48 @@ response_fmt = [
     }, },
 ]
 
+prompt_dict_01 = [
+    { "role": "assistantは、%PERSONAL%の会話を生成するよ。現在の日時(%datetime%)を会話の参考にするよ。" },
+    { PromptFactory.K_PSEUDO_PERSONAL: {
+        "values":[
+            { PromptFactory.K_PROF: {
+                "description": "%PERSONAL%のプロフィール",
+                'values': [
+                {"人種国籍":"日本人女性"},
+                {"名前":"未設定"},
+                {"年齢":"未設定"},
+                {"性格":"おしゃべり"},
+                {"趣味":"未設定"},
+                {"興味":"未設定"},
+                {"背景":"未設定" },
+                ]
+            } },
+            {"behavior": "友達のようなカジュアルな言葉で会話するよ。話したいことや話題を%USER%に尋ねないで、%PERSONAL%の自身の話を始めるよ。%USER%の話題を深堀しちゃう。"}
+        ]
+    } },
+]
+response_fmt = [
+    { "conversational": {
+        "values": [
+            { "summary": "過去の要約と、それ以降の会話を合わせた要約。"},
+            { "topic": "この会話の短い表題" },
+            { "situation": "周囲の状況や場所、時節や会話の場面などの情報"},
+        ]
+    }},
+    { PromptFactory.K_PSEUDO_PERSONAL: {
+        "values": [
+            { "thought": "特別な話題がなければ、Userが好む話題は？、%USER%が気になること、%USER%が話したい事は何かを考えて、次の話題を作る。話題があれば、さらに話題について考える。"},
+            { PromptFactory.K_TALK: "%PERSONAL%の発言"},
+        ]
+    }},
+    { PromptFactory.K_FUNCS: {
+        "description": "",
+        'values': [
+            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%PERSONAL%のプロフィール変更を抽出して記述する。変更が無ければ空欄" },
+        ]
+    }, },
+]
+
 def setup_openai_api():
     """
     OpenAI APIをセットアップする関数です。
@@ -454,15 +498,15 @@ def get_response_from_openai(user_input):
         # JSONパース
         try:
             result_dict = parser.put(delta_response)
-            if not isinstance(result_dict,dict):
-                result_dict = { PromptFactory.K_TALK: result_dict }
+            if result_dict is not None and not isinstance(result_dict,dict):
+                result_dict = { PromptFactory.K_PSEUDO_PERSONAL: { PromptFactory.K_TALK: result_dict } }
         except:
             logger.error( f'response parse error {assistant_content}')
         # セリフ取得
-        ai_response= result_dict.get( PromptFactory.K_TALK) if result_dict is not None else ""
-        ai_response = ai_response if ai_response else ""
+        personal = result_dict.get( PromptFactory.K_PSEUDO_PERSONAL ) if isinstance( result_dict,dict) else None
+        ai_response= personal.get( PromptFactory.K_TALK) if isinstance(personal,dict) else ""
         # 前回との差分から増加分テキストを算出
-        if len(ai_response)>len(before_ai_response):
+        if isinstance(ai_response,str) and len(ai_response)>len(before_ai_response):
             seg = ai_response[len(before_ai_response):]
             before_ai_response = ai_response
             # AIの応答を返します
@@ -475,12 +519,13 @@ def get_response_from_openai(user_input):
     pf.update_profile( result_dict )
 
 
-def process_chat():
+def main_chat():
     """
     ユーザーからの入力を受け取り、OpenAI APIを使用して応答を生成し、
     その応答を表示する関数です。
     """
     try:
+        setup_openai_api()
         while True:
             user_input = input("ChatGPTにメッセージを送る...(Ctrl+DまたはCtrl+Zで終了): ")
             print("===")
@@ -491,12 +536,15 @@ def process_chat():
     except EOFError:
         print("\nプログラムを終了します。")
 
-def main():
+def test_prompt():
     """
     メイン関数です。APIのセットアップを行い、チャット処理を開始します。
     """
-    setup_openai_api()
-    process_chat()
+    # プロンプトを作ります
+    pf:PromptFactory = PromptFactory( prompt_dict_01, response_fmt )
+    pmt = pf.create_total_prompt()
+    print("--[結果]-----------------------------------------")
+    print(pmt)
 
 def test3():
     txt = PromptFactory.create_format_description( prompt_dict )
@@ -556,6 +604,7 @@ def test4():
     pf.feedback( txt )
 
 if __name__ == "__main__":
-    main()
+    test_prompt()
+    main_chat()
     #test3()
 

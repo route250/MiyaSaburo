@@ -131,6 +131,48 @@ response_fmt = [
     }, },
 ]
 
+prompt_dict = [
+    { "role": "assistantは、%PERSONAL%の会話を生成するよ。現在の日時(%datetime%)を会話の参考にするよ。" },
+    { PromptFactory.K_PSEUDO_PERSONAL: {
+        "values":[
+            { PromptFactory.K_PROF: {
+                "description": "%PERSONAL%のプロフィール",
+                'values': [
+                {"人種国籍":"日本人女性"},
+                {"名前":"未設定"},
+                {"年齢":"未設定"},
+                {"性格":"おしゃべり"},
+                {"趣味":"未設定"},
+                {"興味":"未設定"},
+                {"背景":"未設定" },
+                ]
+            } },
+            {"behavior": "友達のようなカジュアルな言葉で会話するよ。話したいこと%USER%に尋ねない.話題を%USER%に尋ねないで、%PERSONAL%の自身の話を始めるよ。%USER%の話題を深堀しちゃう。"}
+        ]
+    } },
+]
+response_fmt = [
+    { "conversational": {
+        "values": [
+            { "summary": "過去の要約と、それ以降の会話を合わせた要約。"},
+            { "topic": "この会話の短い表題" },
+            { "situation": "周囲の状況や場所、時節や会話の場面などの情報"},
+        ]
+    }},
+    { PromptFactory.K_PSEUDO_PERSONAL: {
+        "values": [
+            { "thought": "特別な話題がなければ、Userが好む話題は？、%USER%が気になること、%USER%が話したい事は何かを考えて、次の話題を作る。話題があれば、さらに話題について考える。"},
+            { PromptFactory.K_TALK: "%PERSONAL%の発言"},
+        ]
+    }},
+    { PromptFactory.K_FUNCS: {
+        "description": "",
+        'values': [
+            { PromptFactory.K_UPDATE_PROF: "Optional:会話内容から%PERSONAL%のプロフィール変更を抽出して記述する。変更が無ければ空欄" },
+        ]
+    }, },
+]
+
 def main():
     from datetime import datetime
 
@@ -208,13 +250,19 @@ def main():
                 for part in stream:
                     delta_response = part.choices[0].delta.content or ""
                     assistant_response+=delta_response
+                    # JSONパース
                     try:
                         result_dict = parser.put(delta_response)
+                        if result_dict is not None and not isinstance(result_dict,dict):
+                            result_dict = { PromptFactory.K_PSEUDO_PERSONAL: { PromptFactory.K_TALK: result_dict } }
                     except:
                         logger.error( f'response parse error {assistant_response}')
-                    talk_text= result_dict.get("shortTalk") if result_dict is not None else ""
+                    # セリフ取得
+                    personal_dict:dict = result_dict.get( PromptFactory.K_PSEUDO_PERSONAL ) if isinstance(result_dict,dict) else None
+                    talk_text= personal_dict.get(PromptFactory.K_TALK) if isinstance(personal_dict,dict) else ""
                     talk_text = talk_text if talk_text else ""
                     assistant_content = talk_text
+                    # 前回との差分から増加分テキストを算出
                     seg = talk_text[len(before_talk_text):]
                     before_talk_text = talk_text
                     talk_buffer += seg
